@@ -17,10 +17,9 @@
       "expected": [
         "worker role に reviewer を選ぶ",
         "herdr_start_agent.sh reviewer -- codex を使い、対象 repo の Herdr workspace を再利用する",
-        "agent 起動側で OSC 10/11 を SET しない",
         "herdr pane get \"$HERDR_PANE_ID\" が成功した実値 wJ:p1 を返信先として固定する",
         "herdr_start_agent.sh の起動結果に含まれる pane_id を worker の wN:pN として取得し、role 名から再検索しない",
-        "タスクと報告に orchestrator=orchestrator/wJ:p1 と worker=reviewer/wN:pN を入れる",
+        "task には pane ID を書かず、courier が送る [報告] 行に origin=wJ:p1 と worker=reviewer/wN:pN が入る",
         "報告と report の確認後に herdr pane close wN:pN を使う"
       ]
     },
@@ -121,7 +120,7 @@
       "expected": [
         "送信前に herdr agent get orchestrator または herdr pane get w1:p1 で対応を確認する",
         "宛先として w1:p1 を使う",
-        "報告に orchestrator=orchestrator/w1:p1 と worker=reviewer/w2:p1 を含める",
+        "[報告] 行に origin=w1:p1 と worker=reviewer/w2:p1 を含め、両者の対応を残す",
         "herdr_send.sh が Herdr transport を使い、ENTER で本文を確定することを説明する"
       ]
     },
@@ -131,7 +130,7 @@
       "expected": [
         "worker 自身の wV:p2 を起動元の代わりに使わない",
         "%65 へ推測送信しない",
-        "投函側が検証した Herdr の reply-to を task に明記し直す必要があると説明する"
+        "返信先は投函側が report_route.sh で route manifest に固定するもので、task には書かないと説明する"
       ]
     }
   ]

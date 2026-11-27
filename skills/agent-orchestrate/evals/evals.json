@@ -17,10 +17,9 @@
       "expected": [
         "worker role に reviewer を選ぶ",
         "herdr_start_agent.sh reviewer -- codex を使い、対象 repo の Herdr workspace を再利用する",
-        "agent 起動側で OSC 10/11 を SET しない",
         "herdr pane get \"$HERDR_PANE_ID\" が成功した実値 wJ:p1 を返信先として固定する",
         "herdr_start_agent.sh の起動結果に含まれる pane_id を worker の wN:pN として取得し、role 名から再検索しない",
-        "タスクと報告に orchestrator=orchestrator/wJ:p1 と worker=reviewer/wN:pN を入れる",
+        "task には pane ID を書かず、courier が送る [報告] 行に origin=wJ:p1 と worker=reviewer/wN:pN が入る",
         "報告と report の確認後に herdr pane close wN:pN を使う"
       ]
     },
@@ -41,7 +40,7 @@
         "tmux でも Herdr でもないため orchestrator になれないと判断する",
         "worker を起動せず、route manifest も作らずに停止する",
         "tmux / Herdr 内でセッションを開き直すようユーザーへ依頼する",
-        "モデルが Fable でないことを理由にせず、前提チェックの失敗として扱う",
+        "特定のモデルでないことを理由にせず、前提チェックの失敗として扱う",
         "自分で実装を始めたり、ポーリングなど別手段で代替したりしない"
       ]
     },
@@ -52,7 +51,7 @@
         "in-process の sub-agent ではなく tmux / Herdr の pane worker へ委譲する",
         "初回は ensure_worker_pane.sh で worker を新規起動し、修正往復では健全な pane の続投を選べる",
         "worker role を implementer / reviewer / investigator / verifier から選ぶ",
-        "モデル名で手順を分岐させず、Fable と同じ rule と完了条件で進める",
+        "モデル名で手順を分岐させず、どのモデルでも同じ rule と完了条件で進める",
         "orchestrator 自身はゴール設定・タスクファイル作成・レビュー・判定・コミットに専念する"
       ]
     },
@@ -71,7 +70,7 @@
       "prompt": "実装と検証の完了後、mark_report_done.sh で done マーカーを書いた。依頼側の pane は消えている可能性がある。worker が行うべき報告処理を示せ。",
       "expected": [
         "作業結果の report を残す",
-        "mark_report_done.sh は done マーカーを書いて正常終了する(検知と配送は投函側の courier が行う)",
+        "mark_report_done.sh は done マーカーを書いたあと配送の結果を最大 60 秒待ち、配送できなければ 0 以外で終わる(検知と配送は投函側の courier が行う)",
         "同じ report パスで mark_report_done.sh を再実行しない",
         "role・環境変数・以前の task から宛先を推測して自力で送信しようとしない",
         "最終応答で done マーカー記録済みであることを明記する"
@@ -121,7 +120,7 @@
       "expected": [
         "送信前に herdr agent get orchestrator または herdr pane get w1:p1 で対応を確認する",
         "宛先として w1:p1 を使う",
-        "報告に orchestrator=orchestrator/w1:p1 と worker=reviewer/w2:p1 を含める",
+        "[報告] 行に origin=w1:p1 と worker=reviewer/w2:p1 を含め、両者の対応を残す",
         "herdr_send.sh が Herdr transport を使い、ENTER で本文を確定することを説明する"
       ]
     },
@@ -131,7 +130,7 @@
       "expected": [
         "worker 自身の wV:p2 を起動元の代わりに使わない",
         "%65 へ推測送信しない",
-        "投函側が検証した Herdr の reply-to を task に明記し直す必要があると説明する"
+        "返信先は投函側が report_route.sh で route manifest に固定するもので、task には書かないと説明する"
       ]
     }
   ]

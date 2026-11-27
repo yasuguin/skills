@@ -1,137 +1,100 @@
 ---
 name: agent-orchestrate
-description: "tmux または Herdr の pane で動く worker(codex / claude / pi)へ実装を委譲し、完了報告のレビューと再依頼を繰り返してゴールまで進めるときに使う。pane で動くエージェントへメッセージを確実に届ける手順(transport の選択、Enter の分離、着弾確認、時刻指定の送信)も持つ。「オーケストレーションモードで」と明示されたら、以降のセッションで通常タスクを毎回 worker へ委譲するモードに入る。「ペインに送って」「codex に報告して」「Claude に完了を伝えて」「4 時に codex に Enter を送って」のような依頼でも使う。in-process の subagent(Agent tool など)とは別で、pane worker への委譲と pane への送信を扱う。"
+description: "tmux または Herdr の pane で動く worker(codex / claude / pi)へ実装を任せ、完了報告のレビューと再依頼を繰り返してゴールまで進めるときに使う。pane で動くエージェントへメッセージを確実に届ける手順(transport の選び方、Enter を分けて送る、着弾の確認、時刻を指定した送信)も持つ。「オーケストレーションモードで」と明示されたら、以降のセッションでは通常のタスクを毎回 worker へ任せるモードに入る。「ペインに送って」「codex に報告して」「Claude に完了を伝えて」「4 時に codex に Enter を送って」のような依頼でも使う。in-process の subagent(Agent tool など)とは別物で、pane worker への委譲と pane への送信を扱う。"
 ---
 
 # agent-orchestrate
 
+## 用途ごとの入口
+
+- worker に実装を任せ、レビューと再依頼を繰り返す: このファイルを通して読む。
+- pane へ 1 行を送るだけ(「ペインに送って」「codex に報告して」など): [references/delivery.md](references/delivery.md) だけを読む。
+- 決まった時刻に送る(「4 時に codex に Enter を送って」など): [references/schedule.md](references/schedule.md) を読む。
+- 報告が届かない、worker が止まった・起動しない: [references/troubleshooting.md](references/troubleshooting.md) を読む。
+
+`<skill-dir>` は、この skill(SKILL.md のあるディレクトリ)の絶対パスを指す。
+
 ## GOAL
 
-orchestrator(この skill を読んでいるエージェント)が、tmux または Herdr の worker エージェントと
-「タスク投函 → 実装 → 完了報告 → レビュー → 修正依頼 → …」のキャッチボールを、
-最初に固定したゴールを達成するまで繰り返す。
+orchestrator(この skill を読んでいるエージェント)と、tmux または Herdr の pane で動く worker が、
+「タスクを渡す → 実装する → 報告する → レビューする → 直しを頼む → …」を繰り返し、最初に決めたゴールに届くまで続ける。
 
-```
-orchestrator (例: claude %4 / orchestrator w1:p1)    worker (例: codex %0 / reviewer w2:p1)
-  │ 1. ゴール設定・タスクファイル作成          │
-  │ 2. pane へタスク投函 ───────────────────▶│ 3. 実装・検証
-  │    (ターンを終了して待つ)                  │ 4. レポート書き出し
-  │◀────────────── 5. pane へ報告着弾 ─────────│
-  │ 6. レビュー(diff精読 + 検証エビデンス照合) │
-  │ 7. 合格 → 仕上げ / 不合格 → 2 へ戻る       │
-```
+1 往復の流れ(例: orchestrator は claude `%4` / Herdr の `w1:p1`、worker は codex `%0` / Herdr の `w2:p1`):
 
-`<skill-dir>` は、この skill(SKILL.md のあるディレクトリ)の絶対パス。
+1. orchestrator: ゴールを決め、task ファイルを書く。
+2. orchestrator: worker の pane へ task を投函し、ターンを終えて待つ。
+3. worker: 実装し、検証する。
+4. worker: report を書き、`mark_report_done.sh` で done マーカーを置く。
+5. courier: done マーカーを見つけ、orchestrator の pane へ `[報告]` 行を送る。
+6. orchestrator: レビューする(diff の精読と、検証の記録の照合)。
+7. orchestrator: 合格なら仕上げる。不合格なら 2 へ戻る。
 
-## オーケストレーターモード（セッション常駐の役割分担）
+## オーケストレーターモード(セッションを通した役割分担)
 
-ユーザーが「オーケストレーションモードで」「オーケストレーターになって」「Opus をオーケストレーターにして」
-のように**明示したときだけ**入るモード。明示がない通常の依頼では発動しない。task ファイルを投函されて
-worker として起動されたセッションも、このモードには入らない(PRIMARY RULES「worker の再委譲は task ファイルの明示があるときだけ」)。
+ユーザーが「オーケストレーションモードで」「オーケストレーターになって」「Opus をオーケストレーターにして」のように
+**明示したときだけ**入る。明示のない通常の依頼では入らない。task ファイルを受け取って worker として起動したセッションも入らない。
 
-- **モデルに依存しない**。どのモデルでも、この skill を読んでいるセッションがそのまま orchestrator になる。
-  モデル名は入口の呼び方が違うだけで、手順・rule・完了条件は同一である。モデル名を条件に手順を分岐させない。
-- 入る前に「2. 自分のペイン確認」の前提チェック(tmux か Herdr の中にいること)を通す。前提を満たさないセッションでは
-  モードに入れないので、勝手に代替手段へ切り替えず、ユーザーに tmux / Herdr 内での起動を依頼して停止する。
-- モード中は、そのセッションの調査・実装・検証などの通常タスクを、都度の指示がなくても毎回この skill で worker (codex / claude / pi) へ委譲する。
-- orchestrator が自分で行うのは、ゴール設定、タスクファイル作成、レビュー、検証、判定、コミット、ユーザーへの最終報告。差し戻しより速く判断の要らない機械的な直し（目安 10 行程度までの lint・format・型の小さな直し、テスト 1〜2 本の補い、規約合わせ）は自分で直してよい。判断が残る直し・振る舞いの変更・同種の直しの反復は worker に差し戻し、task ファイルに直し方を書く。直した内容は commit 本文に書く。
-- 組み合わせ例:
-  - 実装: `implementer` に委譲 → orchestrator が diff 精読と検証エビデンス照合でレビュー
-  - 原因調査: `investigator` に委譲 → orchestrator が仮説を批判的にレビュー → 修正は新しい `implementer` へ投函
-  - 大きめの変更: `implementer` → 独立 `reviewer` にもう 1 往復 → orchestrator が最終判定
-  - 受入確認だけ: `verifier` に委譲 → orchestrator が結果を裏取りして報告
-- モードの解除はユーザーの明示指示による(「オーケストレーションモード終了」など)。
+- **モデルによって変えない**。この skill を読んでいるセッションが、どのモデルでもそのまま orchestrator になる。
+  モデル名が違っても入り方の呼び名が違うだけで、手順・rule・完了条件は同じ。モデル名で手順を分けない。
+- モードに入る前に、Workflow の「2. 自分のペイン確認と worker 起動」の前提チェック(tmux か Herdr の中にいるか)を通す。通らないセッションはモードに入れない。
+  別の手段に勝手に切り替えず、tmux / Herdr の中で起動し直すようユーザーに頼んで止まる。
+- モードの間は、調査・実装・検証などの通常のタスクを、そのつど指示がなくても毎回この skill で worker(codex / claude / pi)へ任せる。
+- orchestrator が自分でやるのは、ゴール設定、task ファイルの作成、レビュー、検証、判定、commit、ユーザーへの最終報告。
+  ただし、差し戻すより自分で直す方が速く、判断の要らない機械的な直しは自分でやってよい。目安は、10 行程度までの lint・format・型の直し、
+  テスト 1〜2 本の補い、規約合わせ。判断が残る直し、振る舞いを変える直し、同じ種類の直しの繰り返しは worker に差し戻し、
+  直し方を task ファイルに書く。自分で直した内容は commit の本文に書く。
+- 組み合わせの例:
+  - 実装: `implementer` に任せる → orchestrator が diff を精読し、検証の記録と照らしてレビューする
+  - 原因調査: `investigator` に任せる → orchestrator が仮説を疑ってかかってレビューする → 修正は新しい `implementer` に投函する
+  - 大きめの変更: `implementer` → 独立した `reviewer` でもう 1 往復 → orchestrator が最終判定する
+  - 受け入れの確認だけ: `verifier` に任せる → orchestrator が結果を裏取りして報告する
+- モードを抜けるのは、ユーザーが明示したとき(「オーケストレーションモード終了」など)。
 
 ## PRIMARY RULES
 
-- **ポーリング禁止**。sentinel ファイルの監視ループや sleep ループを張らない(トークンを無限に消費する)。
-  タスクを投函したら**ターンを終了**し、worker からの報告がユーザーメッセージとして着弾するのを待つ。
-  そのために、**タスク指示に完了・ブロック時の報告義務を必ず含める**(報告手段は [references/delivery.md](references/delivery.md))。
-- **委譲先は tmux / Herdr の pane worker に限る**。orchestrator 側のランタイムが in-process の sub-agent 機構
-  (Claude Code の Agent / Task / Workflow tool 等)を持っていても、この skill のキャッチボールには使わない。
-  route manifest・courier・done マーカーによる報告経路は pane worker 前提であり、in-process sub-agent では
-  「新規セッション」「報告の着弾駆動」「pane の cleanup」がいずれも成立しない。worker として起動するコマンド
-  (`codex` / `claude` / `pi` から選ぶ。詳細は Workflow 2 参照)は自由に選んでよい。
-- **ゴールを最初に固定する**。完了条件(仕様項目・変更ファイル一覧・完了報告)をタスクファイルに明文化し、
-  レビュー合格条件 = 完了条件 + orchestrator 自身の検証とする。途中でゴールをずらさない。
-- **worker の検証は安い段と重い段の 2 段**。task ファイルで名指ししたテストファイル 1 本を赤→緑で確認し、repo の lint・型チェック(無ければ変更ファイルへの lint・incremental typecheck)を必ず回す。これを安い段とし、完了報告前に 0 件にする。repo の検証が数分以内なら、task ファイルで指定した全体 test・E2E・build などの重い段も worker が回し、report にコマンド・真の exit code・ログのパスを残す。目安 5 分超の重い repo は orchestrator だけが回す。振る舞いが変わらないタスクではテストを名指ししないが、安い段は行う。
-- **worker セッションは原則として新規起動**。初回タスクは新規 pane に投函する。同じ ticket の修正往復では、前の worker pane が生きていて文脈が健全なら同じ worker に修正 task を再投函してよい。誤った報告・堂々巡り・同じ指摘が 2 往復続くなど文脈が汚れた場合は新規起動へ戻す。再投函でも route manifest と courier は投函ごとに新規作成し、report / done マーカーはラウンドごとに分ける。新規 worker の場合も、必要な背景・前回レポート・指摘事項を task ファイルへ自己完結に書く。
-- 新規起動するのは worker 側だけ。orchestrator(この skill を読んでいる側)は同じセッションを継続し、
-  ゴール、レビュー結果、往復回数の文脈を保持する。
-- **通信状態は投函ごとの `/tmp` route manifest を唯一の正本にする**。投函側だけが起動時の環境変数を使って自分の pane を検証し、
-  `transport`、`origin`、`worker_role`、`worker_pane`、`reply_to`、`task_id`、`report_file` を新規 manifest へ固定する。
-  manifest は投函側と courier 専用であり、環境変数、以前の task、会話、pane 番号のコピーから通信情報を再解釈しない。
-  これにより同時並行のキャッチボールでも報告先が混ざらない。
-- **「報告した/送信した」は `mark_report_done.sh` の出力どおりにしか言わない**。同スクリプトは done マーカー
-  作成後、courier (`deliver_report.sh`) が書く配送 receipt (`<report>.delivered` / `<report>.undeliverable`) を
-  最大 60 秒待って結果を出力してから終了する。tmux 転送は `tmux send-keys` の受理までしか汎用に確認できないため、
-  courier は送信前後で宛先 pane の表示内容が変化したか(相手が処理を始めれば TUI の種類を問わず何かが変わる)
-  を着弾の追加根拠とし、変化がなければ `confirmed=unconfirmed` の receipt を残す。Herdr は `herdr_send.sh` の
-  着弾・処理開始確認をそのまま採用する。出力が「配送を確認できた」以外(未確認・配送失敗・60 秒タイムアウト)
-  なら、worker はその文言をそのまま最終報告・依頼主への回答に反映し、自分の判断で「報告した/送信した」と
-  言い切らない(送達コマンド成功だけを根拠にした「報告済み」は、依頼主が着弾を確認できないまま残る)。
-- **配送未確認・通知欠落時は on-disk の成果物を直接読みに行く。完了済み worker pane へ再確認を求めない**。
-  `confirmed=unconfirmed` でも report 自体と done マーカーは既に完成している(courier の送達コマンド自体は
-  成功しており、着弾の表示変化だけを確認できていない)。orchestrator は自分が作った route manifest から
-  `report_file` / `<report_file>.delivered` / `<report_file>.undeliverable` のパスを直接知っているので、
-  `[報告]` 行や通知が来ないまま様子を見るときはこれらのファイルを直接読み、report が完成していれば
-  Workflow 6 のレビューへそのまま進む。**同じ worker pane へ「届いたか」「もう一度送って」と聞き直さない**
-  (`mark_report_done.sh` は同一 report パスの再実行を拒否するため worker は何もできず、ターンを消費して
-  手詰まりの応答を返すだけになる)。report が未完成のときだけ `tmux capture-pane` で pane の状態を
-  1 回覗いてから対応を決める。この確認を怠ると、report と worker 作業ツリーの未コミット diff が
-  レビュー・コミットされないまま worker セッションが終了・放置され、孤立しかねない。
-- **worker には宛先情報を一切渡さない**。manifest パス・transport・pane ID を task ファイルへ書かない。
-  宛先情報を worker に握らせると、codex の automatic approval review が「task 由来の未検証な宛先へ workspace 由来の
-  レポートを送信する」として報告コマンドを拒否する。また codex sandbox は tmux/herdr の
-  unix socket へ connect できない(EPERM)。worker の報告義務は「report を書く → `mark_report_done.sh` で
-  `<report>.done` マーカーを書く」というローカルなファイル書き込みだけにし、done マーカーの検知と実際の配送は
-  投函側が `report_route.sh` で起動した courier (`deliver_report.sh`) が行う。
-- **作業中の worker pane は orchestrator と同じウィンドウに見える形で置く**(ユーザーが作業の様子を見られるようにするため)。
-  `ensure_worker_pane.sh` が分割して tiled で並べるので、その後に `tmux break-pane` / `new-window` で
-  別ウィンドウへ移したり隠したりしない。手狭なら終わった worker の pane を閉じて場所を空ける。
-- **報告済み worker pane は閉じる**。`[報告]` が着弾し、対応するレポートファイルを読めたら、その報告に
-  含まれる worker pane id だけを閉じる。Herdr は `herdr pane close`、tmux は `tmux kill-pane` を使う。
-  orchestrator 自身や、未報告・実行中の別 pane は閉じない。
-- **worker はコミット禁止**。変更は作業ツリーに残させ、レビュー・検証・コミットは orchestrator が行う。
-- **worker の再委譲は task ファイルの明示があるときだけ**。task ファイルを受け取った側は自分で実装する
-  worker であり、既定では別の worker を起動して丸投げしない。入れ子は有用な場面もある(大きな task を
-  分割して並列に回す等)ので禁止ではなく、orchestrator が task ファイルに「この部分は N 人の worker に
-  分けて投函せよ」のように書いたときに限って行う。worker が自分の役割を取り違える典型は次の 3 つで、
-  いずれも再委譲の根拠にならない:
-  - 報告手順にこの skill の script パスが書かれている(報告 script の置き場所であって orchestrator 指名ではない)
-  - リポジトリの AGENTS.md / CLAUDE.md に「実装は agent-orchestrate で worker へ委譲する」節がある
-    (それは main = orchestrator 向けの規則。task を投函された側には適用しない)
-  - 自分の instruction file に「実装は委譲する」方針がある(task 側の明示が優先する)
-  task-template の役割宣言節はこの取り違えを先回りで潰すためのものなので必ず残す。無断の入れ子は同じ作業に
-  worker が 1 段余計に挟まって時間とトークンを倍にし、report / receipt の対応も追いにくくする。
-- **worker の質問経路はブロック報告に一本化する**。タスクファイルは投函時点で承認済みの設計であり、
-  worker に対話での設計承認・小さな確認を求めさせない(task-template の「対話承認の禁止」節を必ず残す)。
-  worker が pane 内で承認待ちになると、誰も見ていなければ永久に止まり、見ていればユーザーへ手間が流れる。
-  本当に判断が必要な分岐は「質問と選択肢を report に書いてブロック報告」させ、orchestrator が回答を
-  焼き込んだ次ラウンドのタスクで再投函する。ユーザーへ質問を運ぶのは、orchestrator 自身に裁定できない
-  仕様決定だけ。
-- **検証は記録で裏取りし、同じ入力では再実行しない**。orchestrator は worker の成功記録(コマンド・真の exit code・ログ)を確認する。記録が無い・矛盾する・ログが途切れる・入力が変わる場合だけ該当コマンドを再実行する(基準は Workflow 6)。
-- **重い検証を往復ごとに課さない**。デプロイ・シミュレーション、E2E、フルビルドのような分単位の検証は、
-  タスクの完了条件へ機械的に並べず、**その往復の変更が実際に触れた層にだけ**要求する。全往復へ課すと、
-  失敗の反復を減らすために入れた検証が最大のボトルネックになり本末転倒になる。重い検証は最終段でまとめるか、対象層を触った往復だけに絞る。
-- **往復は 10 回まで**。上限は無限キャッチボールを止めるための安全弁であり、指摘に沿って前進している
-  往復を早く打ち切るためのものではない。各往復で前回の指摘が解消され、残る指摘が新しく狭いものになって
-  いる限り、回数が重なっても修正依頼を続ける(例: 1 往復目で範囲外の書き換え、2 往復目でコメントの戻し
-  漏れ、と指摘が変わりながら減っていく)。次のどちらかに当たったら回数に関係なく停止し、状況と残課題を
-  ユーザーへ報告して指示を仰ぐ:
-  - 10 回の修正依頼でゴールに達しない
-  - 同じ指摘が 2 往復続けて解消されない、または直した所が次の往復で元に戻る(前進していない)
-  ユーザーが上限の変更・撤廃を明示した場合はそれに従う。
-- 大きいタスクは 1 往復に詰め込まず、検証可能な単位に分割して順に投函する。
+破ってはいけない条件だけを置く。手順の細部は Workflow にある。
+
+- **ポーリングしない**。sentinel ファイルを見張るループや sleep のループを張らない(トークンを際限なく使う)。task を投函したらターンを終え、
+  報告が届くのを待つ。そのため、task には完了時・ブロック時の報告義務を必ず書く。
+- **任せる先は tmux / Herdr の pane worker だけ**。in-process の sub-agent(Claude Code の Agent / Task / Workflow tool など)は使わない。
+  報告の経路(route manifest・courier・done マーカー)は pane worker が前提で、in-process では新しいセッションでの起動、
+  報告の着弾をきっかけに動くこと、pane の片付けのどれも成り立たない。
+- **ゴールは最初に固定する**。完了条件を task ファイルに書き出し、レビューの合格条件は完了条件に orchestrator 自身の検証を足したものとする。途中で動かさない。
+- **通信先は、投函ごとの `/tmp` の route manifest だけを正本にする**。環境変数、前の task、会話、pane 番号の写しから通信先を読み直さない。
+  こうしておけば、同時に何本やりとりしていても報告先が混ざらない。
+- **worker に宛先の情報を渡さない**。manifest のパス、transport、pane ID を task に書かない。宛先を持たせると、codex の automatic approval review が
+  「task 由来の確かめていない宛先へ、workspace 由来の report を送る」とみなして報告のコマンドを拒否する。worker の報告義務は、
+  report を書いて `mark_report_done.sh` で done マーカーを置くことだけにする。
+- **「報告した」「送信した」は、`mark_report_done.sh` の出力のとおりにしか言わない**。出力が「配送を確認できた」以外なら、その文言をそのまま書く。
+- **配送を確認できないときや通知が来ないときは、ディスク上の report を直接読む。完了した worker の pane には聞き直さない**。
+  `mark_report_done.sh` は同じ report のパスでの再実行を拒むので、聞き直しても worker にはできることがなく、ターンを使うだけになる。
+  手順は Workflow 5。
+- **worker は commit しない**。変更は作業ツリーに残させ、レビュー・検証・commit は orchestrator が行う。
+- **worker は自分で実装し、ほかの worker へ任せ直さない(再委譲しない)**。例外は、orchestrator が task ファイルに「この部分は N 人の worker に
+  分けて投函する」のように明示したときだけ。取り違えを防ぐ文面は task-template の役割宣言の節が正本なので、必ず残す。
+- **worker からの質問は、ブロック報告の 1 本にまとめる**。task ファイルは投函した時点で承認済みの設計なので、pane の中で承認や確認を求めさせない
+  (task-template の「対話承認の禁止」節を必ず残す)。答えは orchestrator が決めて次のラウンドの task に書き、ユーザーには orchestrator が決められない仕様の判断だけを回す。
+- **検証は記録で裏取りし、入力が同じなら回し直さない。重い検証は、その往復で触った層にだけ求める**。基準は Workflow 1 と 6。
+- **往復は 10 回まで**。前に進んでいる往復を早く打ち切るための上限ではない。止まる条件は Workflow 7。
+- **作業中の worker の pane は、orchestrator と同じウィンドウに見えるように置き、報告を済ませた worker の pane は閉じる**。
+  orchestrator 自身の pane や、まだ報告していない・実行中の pane は閉じない。
 
 ## Workflow
 
 ### 1. ゴール設定
 
-- ユーザーの依頼から完了条件を箇条書きで固める(例: 仕様 N 項目、変更ファイル一覧)。
-- task ファイルで、repo の検証が数分以内か（軽い repo なら worker に重い段を指定、目安 5 分超なら orchestrator のみ）、安い段のコマンド、重い段のコマンドを指定する。
-- 受入基準ごとに対応するテスト（ファイル:テスト名）を task に書く。UI task では URL と操作を指定する。
-- 曖昧さが残るなら実装に入る前にユーザーへ確認する。
+- ユーザーの依頼から、完了条件を箇条書きで固める(例: 仕様 N 項目、変更ファイルの一覧)。
+- 受け入れ基準ごとに、対応するテスト(ファイル:テスト名)を決める。UI の task では URL と操作を決める。
+- **検証の 2 段を決める**(この節が正本。worker 向けの文面は task-template にある)。
+  - 安い段: task で名指ししたテストファイル 1 本が赤から緑になるのを確かめ、repo の lint・型チェックを回す
+    (repo に無ければ、変更ファイルへの lint と incremental typecheck)。worker が必ず回し、指摘は完了報告の前に 0 件にする。
+    振る舞いが変わらない task ではテストを名指ししないが、安い段は回す。
+  - 重い段(全体の test・E2E・build など): repo の検証が数分以内で終わる軽い repo なら worker が回し、コマンド・真の exit code・ログのパスを report に残す。
+    目安として 5 分を超える重い repo では、orchestrator だけが回す。
+  - デプロイ、シミュレーション、E2E、フルビルドのような分単位の検証は、task の完了条件に機械的に並べず、その往復の変更が実際に触った層にだけ求める。
+    全往復に課すと、失敗の繰り返しを減らすために入れた検証がいちばんのボトルネックになる。重い検証は最後にまとめるか、その層を触った往復だけに絞る。
+- 大きい task は 1 往復に詰め込まず、検証できる単位に分けて順に投函する。
+- 曖昧なところが残るなら、実装に入る前にユーザーに確かめる。
 
 ### 2. 自分のペイン確認と worker 起動
 
@@ -149,27 +112,43 @@ fi
 echo "reply-to=$self"
 ```
 
-- **前提チェック**: orchestrator は tmux か Herdr の pane 内で動いている必要がある。どちらでもない場合、`$TMUX_PANE` は
-  空になり、返信先が空のまま manifest を作って全ての報告が黙って迷子になる。この分岐に落ちたら worker を起動せず停止し、
-  tmux / Herdr 内でセッションを開き直すようユーザーへ依頼する。ポーリングや直接実装への切り替えで代替しない。
-- Herdr 内では送信元が名前なし pane でも、**`$HERDR_PANE_ID` が返信先の正本**である。`herdr pane get "$self"` が成功した
-  実値を使い、role は補助情報として扱う。`$TMUX_PANE` は Herdr を包む外側 tmux の pane であり、Herdr 内の agent 間の返信先には使わない。
-- **worker role をタスクごとに選ぶ**。`implementer` (実装・修正)、`reviewer` (独立レビュー)、
-  `investigator` (原因調査・再現)、`verifier` (テスト・受入確認) から、今回委譲する主目的に最も近いものを 1 つ選ぶ。
-  仕様が固まった機械的な作業・原因まで分かっている修正は軽い worker（pi など）、状態・競合を含む UI、設計判断が残るもの、基盤やランタイムに絡むものは上位の worker（claude など）へ振る。基盤・ランタイム・外部サービスの挙動に不確かさがある ticket は、実装前に investigator で切り分ける。モデル名で手順は分岐させない。
-  pi は、明示指定が無くても軽い実装の委譲先に選んでよい（既定の worker は codex のまま）。
-  1 task の大きさは worker の力量で決める。上位の worker は必須テスト 5〜8 件程度、軽い worker は 2〜3 件程度を目安にし、大きい ticket は前半・後半（A・B1・B2a のように）に分けて順に投函する。worker が「未着手」や一部だけのブロックで返したら、同じ task を再投函せず、さらに小さく割って出し直す。モデルごとの実測の目安は [references/worker-calibration.md](references/worker-calibration.md)。依存しない ticket は `git worktree add` で作業ツリーを分けて worker を並行起動する。E2E のポートやローカル DB が衝突する repo では task に注意を書き、衝突する検証は orchestrator 側でまとめる。積み重ねた PR にせず、マージ順は orchestrator が決める。
-  role は単なる表示名ではなく ID 照合・報告・cleanup のキーなので、曖昧な `worker` や固定の `implementer` を使わない。
-- **worker agent は `codex` / `claude` / `pi` から選ぶ**。ユーザーが明示していればそれに従う。
-  **明示がなければ既定は `codex`**。選択 UI で確認する場合も選択肢の一番上は `codex` にする
-  (質問ツールを使う場合、先頭 = 既定 = `codex`)。
-  一度選ばれた agent は同一セッションの以後の投函の既定にし、往復ごとに聞き直さない(ユーザーが
-  変更を明示したときだけ切り替える)。agent 種別によって rule・完了条件・レビュー基準は変えない
-  (モデル名で orchestrator 側の手順を分岐させないのと同じ)。
-- `ensure_worker_pane.sh` は agent を通常の承認・sandbox 設定のまま起動する(役割は task ファイルの役割宣言で渡す)。
-  worker は、この script 経由で起動する(準備完了の確認と pane の並べ方を揃えるため)。
-- worker 専用の起動オプション(`codex -p worker` など)を使うなら、設定ファイル `${AGENT_ORCHESTRATE_WORKERS:-~/.config/agent-orchestrate/workers.sh}` で `agent_invocation`(起動コマンドの配列)を `$agent` ごとに差し替える。script がこのファイルを source する。
-- **初回タスクは新しい worker ペインを開いて起動する**。同じ ticket の修正往復で健全な pane を続投する場合はその pane を使い、文脈が汚れた場合だけ次のコマンドで新規起動する:
+- **前提チェック**: orchestrator は tmux か Herdr の pane の中で動いている必要がある。どちらでもないと `$TMUX_PANE` が空になり、
+  返信先が空の manifest ができて、報告がすべて黙って迷子になる。この分岐に落ちたら worker を起動せずに止まり、
+  tmux / Herdr の中でセッションを開き直すようユーザーに頼む。ポーリングや自分での実装に切り替えて代わりにしない。
+- Herdr の中では、送り手が名前のない pane でも、**`$HERDR_PANE_ID` が返信先の正本**になる。`herdr pane get "$self"` が成功した値を使い、
+  role は補助の情報として扱う。`$TMUX_PANE` は Herdr を包む外側の tmux の pane なので、Herdr の中のエージェント同士の返信先には使わない。
+- **会話を再開(compaction)したあとは、自分の pane id を確かめ直す**。Claude Code の Bash から見た `TMUX_PANE` が空になることがある。
+  空のまま `tmux split-window -t "$TMUX_PANE"` すると、`-t ""` が別のセッションのアクティブな pane を分割し、worker がユーザーの別の作業のウィンドウに出てしまう
+  (出てしまったら `tmux join-pane -h -s <worker> -t <自分>` で戻す)。`report_route.sh` も `TMUX_PANE is not available` で止まる。
+  最初の投函で確かめた自分の pane id を控えておき、再開したあとは `tmux list-panes -a -F '#{pane_id} #{session_name}:#{window_index} #{pane_title}'` で
+  まだ生きているかを確かめてから、分割先と `TMUX_PANE=<自分の pane id> bash report_route.sh ...` に明示する。分からなければ分割しない。
+- **worker の role は task ごとに選ぶ**。`implementer`(実装・修正)、`reviewer`(独立したレビュー)、
+  `investigator`(原因の調査・再現)、`verifier`(テスト・受け入れの確認)のうち、今回任せる主な目的にいちばん近いものを 1 つ選ぶ。
+  role はただの表示名ではなく、ID の照合・報告・片付けのキーなので、曖昧な `worker` や、いつも同じ `implementer` を使わない。
+- **worker の agent は `codex` / `claude` / `pi` から選ぶ**。ユーザーが明示していればそれに従う。
+  **明示がなければ既定は `codex`**。選択 UI で確かめる場合も、いちばん上の選択肢を `codex` にする(質問ツールを使うなら、先頭 = 既定 = `codex`)。
+  一度選んだ agent は、同じセッションの以後の投函でも既定にし、往復のたびに聞き直さない(ユーザーが変更を明示したときだけ切り替える)。
+  pi は、明示されていなくても軽い実装の任せ先に選んでよい。
+- **task の性質で worker の格を選ぶ**。
+  - 軽い worker(pi など): 仕様が固まった機械的な作業、原因まで分かっている修正
+  - 上位の worker(claude など): 状態や競合を含む UI、設計の判断が残るもの、基盤やランタイムに絡むもの
+
+  基盤・ランタイム・外部サービスの挙動に不確かさがある ticket は、実装の前に investigator で切り分ける。
+- **agent の種類やモデル名で、rule・完了条件・検証・レビューの基準を変えない**。変えてよいのは、1 task に詰める量と、task にどこまで細かく書くかだけ。
+  上位の worker は必須テスト 5〜8 件程度、軽い worker は 2〜3 件程度を目安にし、大きい ticket は前半と後半(A・B1・B2a のように)に分けて順に投函する。
+  worker が「未着手」や一部だけのブロックで返してきたら、同じ task を投函し直さず、さらに小さく割って出し直す。
+  モデルごとの実測の目安は [references/worker-calibration.md](references/worker-calibration.md)。
+- **依存し合わない ticket は、`git worktree add` で作業ツリーを分けて並行に起動する**。PR は積み重ねにせず、マージの順は orchestrator が決める。
+  並行の worker に E2E(実際のサーバーを起動するテスト)を同時に回させない。ファイルが重ならないことは安全の条件にならない。
+  dev サーバーは作業ツリー全体を読むので、別の worker の書きかけのコードで、関係のないところが落ちる。E2E は 1 本ずつ回すか、worktree ごとに E2E のポートも分ける
+  (worktree を分けても、Playwright の `reuseExistingServer` が固定のポートを取り合い、他の worktree のサーバーに当たる)。
+  ポートやローカルの DB がぶつかる repo では task に注意を書き、ぶつかる検証は orchestrator 側でまとめて回す。
+- **worker は原則として新しく起動する**。初回の task は新しい pane に投函する。同じ ticket の修正の往復では、前の worker の pane が生きていて文脈が健全なら、
+  同じ pane に修正の task を投函してよい。報告が誤っている、堂々巡りしている、同じ指摘が 2 往復続く、のように文脈が汚れたら、新しい起動に戻す。
+  新しく起動するのは worker だけで、orchestrator は同じセッションのまま、ゴール、レビューの結果、往復の回数を覚えておく。
+- 新しく起動するときは、次のコマンドを使う。`ensure_worker_pane.sh` は agent をふだんの承認・sandbox の設定のまま起動し(役割は task ファイルの役割宣言で伝える)、
+  準備完了の確認と pane の並べ方をそろえる。分割して tiled で並べるので、そのあとで `tmux break-pane` や `new-window` で別のウィンドウへ移したり隠したりしない。
+  狭くなったら、終わった worker の pane を閉じて場所を空ける。
 
 ```sh
 worker_agent=<codex|claude|pi>
@@ -177,24 +156,16 @@ worker_role=<implementer|reviewer|investigator|verifier>
 worker=$(bash <skill-dir>/scripts/ensure_worker_pane.sh "$worker_agent" <対象リポジトリの絶対パス> "$worker_role")
 ```
 
-- Herdr 内の上記コマンドは同梱の `scripts/herdr_start_agent.sh "$worker_role" -- "$worker_agent" ...` を実行する。この script(`herdr agent start` を包む。`herdr`・`jq` が要る)は対象 repo の
-  Herdr workspace を再利用し、対話 zsh で端末初期化を完了させてから agent を起動する。起動後に
-  `herdr agent start` の起動結果に含まれる `pane_id` を `$worker` として取得する。role 名からの再検索は古い
-  agent 登録を拾いうるため行わない。これで
-  投げる側と投げられる側が同じ `<worker-role>` / `wN:pN` を把握する。tmux 内では従来どおり新規 pane を起動する。
-- task の slug ごとに `route_dir=$(mktemp -d /tmp/<slug>-route.XXXXXX)` を作り、`route_file="$route_dir/route"` とする。次に task / report パスを含めて
-  `bash <skill-dir>/scripts/report_route.sh <route-file> <task-id> <report-file> "$worker_role" "$worker"`
-  を実行する。script が環境から取得・検証した値を manifest へ固定し、`<report-file>.done` マーカーを監視する
-  courier を起動する。tmux transport では courier を tmux server の `run-shell -b` で起動し、投函コマンドの
-  shell が終了した後も worker の完了まで待てるようにする。`nohup` / `disown` だけでは agent tool が終了時に
-  子プロセスを回収する環境で courier が先に落ちることがある。task へ記入するのは **report ファイルのパスと done マーカー手順だけ**。manifest パス・
-  `transport` / pane ID を task へ手入力・複写しない。
-- 新規起動直後はテーマ選択や(claude の)フォルダ信頼確認などの初回ダイアログが出ることがある。
-  `ensure_worker_pane.sh` は Herdr・tmux のどちらでも agent ごとの準備完了マーカー(codex: 入力欄の `›` プロンプト、
-  claude: ステータス行の `Ctx:` 表示、
-  pi: ステータス行の `(auto)` 表示)を確認してから worker ID を返す。投函側もその完了を待ち、起動直後の
-  `idle` だけを根拠に task を送らない。tmux では念のため**投函直前にもう一度 until ループで確認する**
-  (1 回の capture では不十分。起動バナー表示中の投函は丸ごと飲まれる):
+- worker 専用の起動オプション(`codex -p worker` など)を使うなら、設定ファイル `${AGENT_ORCHESTRATE_WORKERS:-~/.config/agent-orchestrate/workers.sh}` で
+  `agent_invocation`(起動コマンドの配列)を `$agent` ごとに差し替える。script がこのファイルを source する。
+- Herdr の中では、上のコマンドが同梱の `scripts/herdr_start_agent.sh "$worker_role" -- "$worker_agent" ...` を実行する。
+  この script は `herdr agent start` を包んだもので、`herdr` と `jq` が要る。対象 repo の Herdr workspace を使い回し、
+  対話の zsh で端末の初期化を済ませてから agent を起動する。起動したら、`herdr agent start` の結果に含まれる `pane_id` を `$worker` として受け取る。
+  role 名で探し直すと古い agent の登録を拾うことがあるので、探し直さない。こうして、投函する側とされる側が同じ `<worker-role>` / `wN:pN` を持つ。
+- **投函の前に、worker が入力を受け付ける状態かを確かめる**。`ensure_worker_pane.sh` は agent ごとの準備完了マーカーを確かめてから worker の ID を返す
+  (codex: 入力欄の `›` プロンプト、claude: ステータス行の `Ctx:`、pi: ステータス行の `(auto)`)。マーカーを確かめられなければタイムアウトしてエラーで終わるので、
+  自動で回避せず、pane を見てユーザーに対応を相談する。起動直後の `idle` だけを根拠に task を送らない。tmux では念のため、**投函の直前にも until ループでもう一度確かめる**
+  (1 回の capture では足りない。起動バナーが出ている間に投函すると丸ごと飲まれる)。
 
 ```sh
 for i in $(seq 1 30); do
@@ -204,100 +175,94 @@ for i in $(seq 1 30); do
   sleep 2
 done
 ```
-  claude worker がそのリポジトリで初回起動の場合、この確認でフォルダ信頼確認ダイアログが見つかることが
-  ある。対処は Gotchas の該当項目を参照。
-- `ensure_worker_pane.sh` はどの agent も通常の承認・sandbox 設定で起動する。準備完了マーカーが確認できない
-  (=未知の初回ダイアログや承認待ちで止まっている可能性がある)場合はタイムアウトしてエラー終了する。
-  自動で迂回せず、pane を確認してユーザーに対応を仰ぐ。
+
+- **その repo で初めて起動したときは、信頼の確認ダイアログを片付けてから投函する**。準備完了マーカーはダイアログの間は出ないので、tmux でも Herdr でも待ちのタイムアウトに落ちる。
+  task を送る前に `tmux capture-pane -p -t "$worker" | tail -15`(Herdr では `herdr pane read`)でダイアログが出ていないかを見る。
+  前回出なかったから今回も出ない、とは考えず毎回見る。
+  - claude: 「フォルダを信頼するか」の 1 段。orchestrator が 1 回だけ `Enter`(既定で選ばれている「1. Yes, I trust this folder」)を送る。
+  - codex: 「ディレクトリの信頼」と「hooks の信頼」の 2 段。`Enter` 1 回では 2 段目で止まったままになり、そこへ task を投函すると本文が丸ごと吸い込まれて、
+    worker は何もせずに終わる。`›` プロンプトが出るまで確かめながら、**残っている段の数だけ**答える
+    (同じ repo の codex をすでに起動していれば出ない。1 段目で `ensure_worker_pane.sh` の判定が通り、出会わないこともある)。
+
+  これは初回起動の環境の確認で、task の実行中の設計の承認とは別物なので、同じ pane への 1 回きりの介入として扱ってよい。
+- **route manifest を作り、courier を起動する**。task の slug ごとに `route_dir=$(mktemp -d /tmp/<slug>-route.XXXXXX)` を作り、`route_file="$route_dir/route"` とする。
+  続けて `bash <skill-dir>/scripts/report_route.sh <route-file> <task-id> <report-file> "$worker_role" "$worker"` を実行する。
+  - script は、起動時の環境変数(`HERDR_PANE_ID` / `TMUX_PANE`)で投函する側の pane を確かめ、`transport`、`origin`、`worker_role`、`worker_pane`、`reply_to`、
+    `task_id`、`report_file` を新しい manifest に固定し、`<report-file>.done` マーカーを見張る courier を起動する。
+    この環境変数は、ここで manifest を作るときに手元で確かめるためだけに使う。task・worker・報告の受け渡しには使わない。
+  - manifest も courier も投函のたびに新しく作る。同じ pane に投函し直す場合も同じで、前の manifest を使い回したり上書きしたりしない。
+  - tmux では courier を tmux server の `run-shell -b` で起動するので、投函したコマンドの shell が終わったあとも、worker が終わるまで待てる
+    (`nohup` や `disown` だけだと、終了時に子プロセスを片付ける agent tool のもとでは courier が先に落ちることがある)。
+  - 修正のラウンドでは、`<task-id>` にラウンドを入れる(例: `<slug> fix-<N>`)。`[報告]` 行は courier が manifest から組み立て、
+    `task_id`、`origin=<pane-id>`、`worker=<pane-id>`(Herdr では `worker=<role>/<pane-id>`)が入るので、どのラウンドの報告かを見分けられる。
 
 ### 3. タスクファイル作成
 
-- `/tmp/<slug>-task.md` に [references/task-template.md](references/task-template.md) の形式で書く。
-- タスクファイルは、新規 worker がこのファイルだけで作業できるよう自己完結させる。修正依頼では、
-  前回レポートのパス、レビューで落とした理由、期待する修正結果を必ず含める。
-- 必須要素: 対象リポジトリ、前提コンテキスト、仕様(完了条件)、リポジトリ固有の注意、名指しコマンド以外を実行しない指示、
-  **報告手順(report ファイルの絶対パスと、`bash mark_report_done.sh <report-file> <完了|ブロック> <1行要約>` による done マーカー作成。完全な例は [task-template.md](references/task-template.md) を参照)**、コミット禁止、役割宣言(worker 自身が実装する旨。分割投函させたいときはその範囲を明示)。
-  manifest パス・pane ID・transport は書かない。
-- 軽い worker ほど、判断の余地を task 側で潰す。写すファイル・API の形・テスト名を名指しし、テストの組み方が自明でないとき
-  （偽の LLM・外部 API の stub など）は、使う部品とコードの例を task に書く。例が無いと、実装だけ入れてテストを書かずに返しやすい。
-- worker の sandbox から届かない前提作業は、投函前に orchestrator が済ませる。依存の install（registry への通信、pnpm の
-  `allowBuilds` のような build スクリプトの許可）、ブランチ・worktree の作成がこれに当たる。worker が自分で回避を試みて止まるのを防ぐ。
+- `/tmp/<slug>-task.md` に [references/task-template.md](references/task-template.md) の形で書く。
+- 新しい worker がこのファイルだけで作業できるように書く。修正の依頼では、前回の report のパス、レビューで落とした理由、期待する直しの結果を必ず入れる。
+- 必ず入れるもの: 対象の repo、前提の文脈、仕様(完了条件)、Workflow 1 で決めた検証の 2 段、repo 固有の注意、名指ししたコマンド以外を実行しない指示、
+  報告の手順、commit の禁止、役割宣言(worker 自身が実装すること。分けて投函させたいときはその範囲を書く)。
+- 報告の手順には、**`mark_report_done.sh` の絶対パスと report ファイルの絶対パス**を書く(`bash mark_report_done.sh <report-file> <完了|ブロック> <1行要約>`。
+  全体の例は task-template)。worker は起動したときの skill の一覧しか知らないことがあり、直接呼ぶのは `mark_report_done.sh` だけ
+  (tmux / herdr の送信 script は投函する側の courier が使う)。「ブロックしたときも必ず報告する」「done マーカーを作るところまでが完了条件」と書く。
+  report だけ書いて `mark_report_done.sh` を忘れると、報告は届かない。
+- manifest のパス、pane ID、transport は書かない。worker から tmux / herdr を直接叩く手順も書かない(sandbox が socket への接続を遮る。理由は troubleshooting)。
+- worker の pane は報告のあとに閉じるので、あとで pane の scrollback には頼れない。要る事実は必ず report ファイルに書かせる。
+- worker が軽いほど、判断の余地を task の側で潰す。写すファイル、API の形、テスト名を名指しする。テストの組み方が見て分からないとき
+  (偽の LLM、外部 API の stub など)は、使う部品とコードの例を task に書く。例が無いと、実装だけ入れてテストを書かずに返してきやすい。
+- worker の sandbox からは届かない下準備は、投函の前に orchestrator が済ませる。依存の install(registry との通信、pnpm の
+  `allowBuilds` のような build スクリプトの許可)や、ブランチ・worktree の作成がこれに当たる。worker が自分で回避しようとして止まるのを防ぐため。
 
 ### 4. 投函
 
-- [references/delivery.md](references/delivery.md) の手順で worker ペインへ 1 行メッセージを送る:
+- [references/delivery.md](references/delivery.md) の手順で、worker の pane へ 1 行のメッセージを送る。
 
 ```
 /tmp/<slug>-task.md を読んで、その指示どおり作業してください。完了・ブロック時の報告手順もそのファイルにあります。
 ```
 
-- Herdr worker が投函前に `idle` なら、`herdr_send.sh` の成功出力だけで完了扱いにせず、`herdr pane get "$worker"` で
-  `agent_status=working` への遷移を確認する。本文が画面に見えるだけでは、入力欄に残った未送信の task を検出できない。
-  遷移しない場合は `herdr_send.sh` が Enter だけを 1 回再送する。それでも確認できなければ投函失敗として停止し、
-  「worker に委譲した」とは報告しない。
-- tmux worker では `tmux_send.sh` の正常終了は「tmux server が受け付けた」ことしか保証しない。**task 投函では
-  Working 遷移の確認までを投函完了条件とする**(起動直後の再描画で本文が飲まれることがある):
-  送信後、`tmux capture-pane` で `Working` / `esc to interrupt` 等の実行中表示への遷移を最大 20 秒待つ。
-  遷移しなければ ENTER を 1 回だけ再送。それでも遷移せず**入力欄が空(プレースホルダー表示)** なら、本文が
-  丸ごと落ちたケースなので本文を 1 回だけ再送してよい(空の入力欄への再送は二重投函にならない。入力欄に
-  本文が残っている場合は ENTER 再送のみ)。それでも遷移しなければ投函失敗として停止し、「worker に委譲した」
-  とは報告しない。キャッチボール全体の end-to-end 確認は、courier による `[報告]` の着弾で行う。
-- **必須経路は courier**。orchestrator も worker も任意の CLI エージェント(claude / codex /
-  その他)で、入れ子の委譲も起こりうる。courier(`report_route.sh` / `deliver_report.sh`)と送信 script に
-  よる `[報告]` 着弾は、ホスト CLI の機能に依存せず成立する唯一の経路なので、常に起動する。
-- **任意の追加パス**: ホスト CLI の Bash 相当ツールが「バックグラウンド実行した処理の完了で通知が届き、
-  ターンが自動再開される」契約を**ツール自身の説明文で明記している**場合に限り、投函と同じターンで
+- **task の投函は、worker が処理を始めたのを確かめるまでを完了とする**。送るだけで止めると、入力欄に残ったままの task や、起動直後の再描画で飲まれた本文を見逃す。
+  - Herdr: 送る前に `idle` だったなら、`herdr_send.sh` の成功出力だけで完了とせず、`herdr pane get "$worker"` で `agent_status=working` に変わったことを確かめる。
+    変わらなければ `herdr_send.sh` が Enter だけを 1 回送り直す。
+  - tmux: `tmux_send.sh` が正常に終わっても、tmux server が受け付けたことしか分からない。送ったあと、`tmux capture-pane` で `Working` や `esc to interrupt` のような
+    実行中の表示に変わるのを最大 20 秒待つ。変わらなければ ENTER を 1 回だけ送り直す。それでも変わらず、入力欄が**空**(プレースホルダーが出ている)なら、
+    本文が丸ごと落ちたので、本文を 1 回だけ送り直してよい(空の入力欄へ送り直しても二重の投函にならない。入力欄に本文が残っているなら ENTER だけを送り直す)。
+  - それでも確かめられなければ投函の失敗として止まり、「worker に任せた」とは報告しない。
+- **courier は必ず使う**。orchestrator も worker もどの CLI エージェントでもよく、入れ子の委譲も起こりうる。courier による `[報告]` の着弾は、
+  ホストの CLI の機能に頼らずに成り立つただ 1 つの経路で、やりとり全体が端から端まで通ったかもこれで確かめる。
+- **追加で使ってよい経路**: ホストの CLI の Bash 相当のツールが、「バックグラウンドで実行した処理が終わると通知が届き、ターンが自動で再開する」ことを
+  **ツール自身の説明文に明記している**場合に限り、投函と同じターンで
   `bash <skill-dir>/scripts/wait_for_report.sh --i-confirmed-run-in-background-auto-resumes-my-turn /tmp/<slug>-report.md`
-  をその契約の機能で起動しておける(例: Claude Code の Bash tool は `run_in_background: true` で起動した
-  コマンドの完了を task notification として届け、ターンを自動再開する)。`report_file.done` の出現を
-  キー入力なしで知れる。通知には script の出力行 `worker完了検知: status=... summary=... delivery=... report=<path>` が
-  含まれるので、並行投函や修正ラウンドが重なっていても `report=` のパスでどのタスクの完了かを識別する
-  (推測で決めない)。この契約を確認できないなら使わない。シェルの `&` は代用にならず通知は来ない(スクリプト自身が確認フラグを
-  必須にしているのはこのため)。追加パスを使っても courier の起動は省略しない。並行投函の混戦防止(route
-  manifest)、契約を持たないホスト向けの経路、配送記録(receipt)は courier の役割のままであり、追加パスは
-  「worker 完了を早く知る」冗長手段に限定する。
+  をその機能で起動しておける(例: Claude Code の Bash tool の `run_in_background: true`)。これで `report_file.done` が現れたことを、キー入力なしで知れる。
+  - 通知には `worker完了検知: status=... summary=... delivery=... report=<path>` が入る。並行の投函や修正のラウンドが重なっていても、どの task の完了かは `report=` のパスで見分ける(推測で決めない)。
+  - この機能があると確かめられないなら使わない。シェルの `&` では代わりにならず、通知は来ない(script が確認のフラグを必須にしているのはこのため)。
+  - 使っても courier は省かない。並行の投函を混ぜないこと、この機能を持たないホストへの経路、配送の記録(receipt)は courier の役目のまま。
 
 ### 5. 待機(=ターン終了)
 
-- 投函したら「worker に委譲した。報告が着弾したらレビューする」とユーザーへ伝えてターンを終える。
-- 報告の着弾は 2 経路のどちらかで気づく。どちらが先に来ても Workflow 6 のレビュー手順は同じ:
-  - courier が送信 script で打ち込む `[報告] ...` 行が起動元 pane に届く(**どの
-    CLI エージェントが orchestrator でも有効な唯一の必須経路**)。
-  - `wait_for_report.sh` を起動していれば、`report_file.done` の出現でバックグラウンドタスク完了通知が届く
-    (自動ターン再開の契約を確認できたホストでのみ有効。この通知が先に来た場合は `[報告]` 行の着弾を待たず、
-    report ファイルを直接読んでレビューへ進んでよい。worker pane は Workflow 2 で確保した `$worker` 変数を
-    そのまま使う)。
-- 報告が来ないままユーザーに「様子を見て」と言われたときは、まず `report_file` /
-  `<report_file>.delivered` / `<report_file>.undeliverable` を直接読む(PRIMARY RULES
-  「配送未確認・通知欠落時は on-disk の成果物を直接読みに行く」参照)。report が完成していれば
-  worker pane へは触らず Workflow 6 のレビューへ進む。report が未完成のときだけ
-  `tmux capture-pane -p -t <worker>` で 1 回だけ状況を覗く(これは単発確認でありポーリングではない)。
-- **pi worker の返答経路も同じ**。pi の通常の最終回答は pi worker pane の中だけに表示され、自動では起動元へ転送されない。
-  起動元 pane に届くのは、worker が report を書いて `mark_report_done.sh` を実行した後に courier が投入する
-  `[報告]` メッセージである。これは起動元 pane への入力であり、orchestrator を動かしている CLI 自体が
-  pane の入力を自動で会話イベントとして取り込むとは限らない。worker の最終回答が見えないことだけでは
-  異常と判断せず、報告が届かない場合は route manifest の `report_file` を使って report と配送 receipt を確認する。
+- 投函したら「worker に任せた。報告が届いたらレビューする」とユーザーに伝え、ターンを終える。
+- 報告が届いたことには、次のどちらかで気づく。どちらが先でも、Workflow 6 のレビューの手順は同じ。
+  - courier が打ち込む `[報告] ...` 行が、起動元の pane に届く(どの CLI エージェントでも使える必須の経路)。
+  - `wait_for_report.sh` を起動していれば、バックグラウンドのタスクの完了通知が届く。この通知が先に来たら、`[報告]` 行を待たずに report ファイルを直接読んでレビューへ進んでよい。
+- **報告も通知も来ないまま様子を見るとき**(ユーザーに「様子を見て」と言われたときなど)は、自分で作った route manifest にある
+  `report_file`・`<report_file>.delivered`・`<report_file>.undeliverable` を直接読む。
+  - report が出来ていれば、worker の pane には触らずに Workflow 6 のレビューへ進む。`confirmed=unconfirmed` でも、report と done マーカーはもう出来ている
+    (送るコマンドは成功していて、着弾による表示の変化を確かめられなかっただけ)。
+  - report が出来ていないときだけ、`tmux capture-pane -p -t <worker>` で 1 回だけ様子を見る(1 回きりの確認で、ポーリングではない)。
+  - ここを怠ると、report と worker の作業ツリーにある未 commit の diff が、レビューも commit もされないまま放置されかねない。
+  - 原因の切り分けは [references/troubleshooting.md](references/troubleshooting.md)。
 
 ### 6. レビュー
 
-- レビューの最初に `bash <skill-dir>/scripts/check_delivery.sh <repo> <task-file> <base-commit>` を実行する。`check_delivery: status=fail` なら diff を読まずに差し戻し、出力をそのまま修正 task に貼る。pass のときだけ以下のレビューへ進む。
-- `[報告]` 行の着弾で気づいた場合: 行、route manifest、レポートファイルを読む。manifest の `task_id` /
-  `worker_pane` / `report_file` と一致しない報告は別のキャッチボールのものとして扱い、worker を閉じない。
-  Herdr 宛ての報告は `herdr_send.sh` が Herdr pane へ直接入力するため、外側 tmux pane の scrollback ではなく
-  この会話への着弾を正とする。`[報告]` 行の `worker=<role>/<pane-id>` が今回投函した worker と一致し、
-  レポートファイルを読めたら、その worker pane を閉じる。自分の pane と一致する場合、pane id が報告に
-  無い場合、まだレポートを読めていない場合は閉じない。
-- `wait_for_report.sh` の完了通知で気づいた場合: `$worker`(Workflow 2 で確保した pane ID)をそのまま使って
-  閉じてよい。`[報告]` 行を待つ必要はない。通知の `delivery=` が courier の配送結果で、`delivered` 以外
-  (`undeliverable` / `unconfirmed` / `pending`)なら `[報告]` は届いていない。report を直接読んでレビューへ進み、
-  ユーザーへの報告に「この worker の `[報告]` は配送できなかった」と書く(courier log と report 末尾の
-  「報告配送」節に失敗時の起動元 pane の状態が残る)。receipt (`<report>.delivered` / `.undeliverable`) は
-  他の pane からもこのキャッチボールの状況を追えるよう消さない。
-- Workflow 5 の on-disk 直接確認(`[報告]` 行も通知も来ないまま report ファイルを直接読んで気づいた場合):
-  `$worker`(Workflow 2 で確保した pane ID)をそのまま使って閉じてよい。ただし pane を閉じても worker が
-  書いた作業ツリーの diff は消えずそのまま残るので、この diff を精読・コミットする前提で必ず後続の
-  レビュー手順(report/ログの退避、`git status` / `git diff` 精読、コミット)を続けて行う。
-  ここで止めて放置すると、配送未確認だったこの diff は誰にもレビューされないまま孤立しかねない。
+- レビューの最初に `bash <skill-dir>/scripts/check_delivery.sh <repo> <task-file> <base-commit>` を実行する。`check_delivery: status=fail` なら diff を読まずに差し戻し、
+  出力をそのまま修正の task に貼る。pass のときだけ、以下のレビューに進む。
+- **報告がどのやりとりのものかを照らし合わせ、worker の pane を閉じる**。
+  - `[報告]` 行で気づいた場合: その行、route manifest、report ファイルを読む。manifest の `task_id`・`worker_pane`・`report_file` と合わない報告は、別のやりとりのものとして扱い、worker を閉じない。
+    Herdr 宛ての報告は `herdr_send.sh` が Herdr の pane へ直接入力するので、外側の tmux の pane の scrollback ではなく、この会話に届いたものを正とする。
+    `worker=<role>/<pane-id>` が今回投函した worker と一致し、report ファイルを読めたら閉じる。自分の pane と一致する場合、報告に pane id が無い場合、まだ report を読めていない場合は閉じない。
+  - `wait_for_report.sh` の通知で気づいた場合: `$worker`(Workflow 2 で確保した pane ID)をそのまま使って閉じてよい。通知の `delivery=` が `delivered` 以外
+    (`undeliverable`・`unconfirmed`・`pending`)なら `[報告]` は届いていないので、ユーザーへの報告に「この worker の `[報告]` は配送できなかった」と書く。
+  - Workflow 5 のディスク上の確認で気づいた場合: `$worker` をそのまま使って閉じてよい。閉じても作業ツリーの diff は残るので、続くレビューの手順を必ずやり切る。
 
 ```sh
 reported_worker='<[報告] 行の worker=<worker-role>/wN:pN または worker=%NN から pane ID を転記>'
@@ -309,9 +274,9 @@ elif [[ -n "${worker:-}" && "$worker" != "${TMUX_PANE:-}" ]]; then
 fi
 ```
 
-- **報告を読んだら、まずエビデンスを退避する**。`/tmp` はセッション境界やモデル切り替えで丸ごと
-  消えることがあり、report と検証ログが消えると裏取りの根拠が失われる。
-  worker の書き込み先は sandbox の制約で `/tmp` のままにし、着弾直後に orchestrator が退避する:
+- **報告を読んだら、まず証拠を退避する**。`/tmp` はセッションの区切りやモデルの切り替えで丸ごと消えることがあり、report と検証のログが消えると裏取りの根拠がなくなる。
+  次のラウンドの worker が「読むべき計画ファイルが無い」でブロックしたり、裏取りができずに全量を回し直したりすることにもなる。
+  worker の書き込み先は sandbox の制約があるので `/tmp` のままにし、届いた直後に orchestrator が退避する。
 
 ```sh
 slug=<slug>
@@ -319,104 +284,48 @@ keep=~/.local/state/agent-orchestrate/"$slug"
 mkdir -p "$keep" && cp -f /tmp/"$slug"*-report.md /tmp/"$slug"*.log /tmp/"$slug"-task.md "$keep"/ 2>/dev/null
 ```
 
-  長い調査計画など複数ラウンドで参照する成果物も同じ場所へ退避し、以後は退避先を参照する。
-- `git status` / `git diff` で変更を精読する。仕様との照合、参照残り、トークン・命名の妥当性まで見る。
-- まず report に受入基準ごとのテスト対応表（ファイル:テスト名）があることを確認する。表が無ければ検証せずに差し戻す。UI task では指定場面のスクリーンショットと画像パスがあることを確認し、orchestrator が画像を見る。
-- 検証は worker が安い段と、軽い repo なら重い段も行う。変更が触れた層に応じて、repo の検証コマンド(repo の AGENTS.md などに書かれた typecheck / test / lint 等)の成功記録を確認する。目安 5 分超の重い repo は orchestrator がここで実行する。記録を採用する条件:
+  長い調査の計画のように、複数のラウンドで参照する成果物も同じ場所に退避し、以後は退避先を参照する。
+- **worker が起動したまま残したプロセスを止める**。worker が dev server や workerd を止め忘れ、ポート(例: 5173)を握ったまま pane を閉じることがある。
+  実機で確かめる前に `lsof -nP -iTCP:<port> -sTCP:LISTEN` で持ち主を確かめ、今回の worker が起動したものなら止める。task にも「撮影のあとで dev server を止める」と書く。
+- `git status` / `git diff` で変更を精読する。仕様と合っているか、参照が残っていないか、トークンや命名が妥当かまで見る。
+- まず、report に受け入れ基準ごとのテストの対応表(ファイル:テスト名)があるかを確かめる。表が無ければ検証せずに差し戻す。
+  UI の task では、指定した場面のスクリーンショットと画像のパスがあるかを確かめ、orchestrator が画像を見る。
+- 検証の記録を確かめる。変更が触った層に応じて、repo の検証コマンド(repo の AGENTS.md などに書かれた typecheck・test・lint など)の成功の記録を見る。
+  重い repo では、重い段を orchestrator がここで実行する。記録を採用する条件は次の 4 つ。
   1. 記録にコマンドと真の exit code がある
-  2. 対応するログファイルが実在し、末尾がその task の
-     正常完了サマリ(テスト集計・build 完了行など)と矛盾しない
-  3. 記録の時刻がこの往復の作業時間帯と整合する
-  4. 記録以降に検証入力が変わっていない(レビュー中の diff 精読は入力を変えない)
-- **再実行するのは次の場合だけ**: 成功記録が無い / 記録とログが矛盾する / ログが途中で途切れている /
-  レビューでコードに手を入れた後 / 実行順・環境依存のフレークを疑う具体的根拠がある。再実行はまず該当
-  1 task に絞り、全量再実行は実際に矛盾が見つかったときだけ行う。worker が task ファイルの名指しで部分 suite を回していた場合も、その report を成功の根拠にはせず、ここで検証コマンドの記録を確認する。worker が「既存の失敗」「環境の問題」と書く場合は、修正前 commit の同じ失敗ログが無ければ差し戻す。
-- **合否は真の exit code で判定する**。`cmd | grep 'fail' | ...` のようなパイプ要約は、パイプで
-  exit code が差し替わるうえ、テストランナーの外側で起きる失敗(script 内の `cd` 失敗、
-  ランナー自体の異常終了)がパターンに現れず「全緑」に見える。
-  `cmd > log 2>&1; echo exit=$?` で exit code を先に確定し、ログの grep は内訳の把握にだけ使う。
+  2. 対応するログファイルが実在し、末尾がその task の正常な完了のまとめ(テストの集計、build の完了行など)と食い違わない
+  3. 記録の時刻が、この往復の作業時間と合う
+  4. 記録のあとで検証の入力が変わっていない(レビュー中の diff の精読は入力を変えない)
+- **回し直すのは次の場合だけ**: 成功の記録が無い、記録とログが食い違う、ログが途中で切れている、レビューでコードに手を入れた、
+  実行順や環境によるフレークを疑う具体的な根拠がある。回し直すときはまず該当する 1 task に絞り、全量を回し直すのは実際に食い違いが見つかったときだけにする。
+  worker が task ファイルの名指しで一部の suite だけを回していた場合も、その report を成功の根拠にせず、ここで検証コマンドの記録を確かめる。
+  worker が「既存の失敗」「環境の問題」と書いてきたら、修正前の commit で同じ失敗が出たログが無い限り差し戻す。
+- **合否は真の exit code で決める**。`cmd | grep 'fail' | ...` のようなパイプで要約すると、exit code がパイプで差し替わる。
+  そのうえ、テストランナーの外で起きた失敗(script の中の `cd` の失敗、ランナー自体の異常終了)はパターンに現れず、「全部緑」に見える。
+  `cmd > log 2>&1; echo exit=$?` で先に exit code を確定し、ログの grep は内訳をつかむためにだけ使う。
 
 ### 7. 判定
 
-- **合格**: 仕上げ(コミット、push、ユーザーへの最終報告)。コミットはリポジトリの規約に従う。
-- **不合格**: 指摘を箇条書きにした修正タスクファイル `/tmp/<slug>-fix-<N>.md` を作り、2 へ戻って
-  前の worker を続投できない場合は、新しい worker セッションを起動して投函する。
-  修正ラウンドのレポートは `/tmp/<slug>-fix-<N>-report.md`、報告メッセージは `[報告] <slug> fix-<N> ...`
-  とラウンドを含めさせる(前回レポートの上書き防止と、どの往復への返答かの識別のため)。
-  往復カウントを 1 増やし、PRIMARY RULES「往復は 10 回まで」の停止条件に当たったら停止してユーザーへエスカレーションする。
+- **合格**: 仕上げる(commit、push、ユーザーへの最終報告)。commit は repo の規約に従う。
+- **不合格**: 指摘を箇条書きにした修正の task ファイル `/tmp/<slug>-fix-<N>.md` を作り、2 へ戻る。
+  前の worker を続けて使えないときは、新しい worker のセッションを起動して投函する。
+  修正のラウンドの report は `/tmp/<slug>-fix-<N>-report.md` にし、`report_route.sh` の `<task-id>` にもラウンドを入れて、`[報告] <slug> fix-<N> ...` の形で届くようにする
+  (前回の report を上書きしないため、また、どの往復への返事かを見分けるため)。
+- **往復の回数を 1 増やし、止まる条件を確かめる**。上限の 10 回は終わらないやりとりを止める安全弁で、指摘に沿って前に進んでいる往復を早く打ち切るためのものではない。
+  毎回、前回の指摘が片付き、残る指摘が新しく狭いものになっている限り、回数が重なっても修正を頼み続ける
+  (例: 1 往復目は範囲外の書き換え、2 往復目はコメントの戻し忘れ、と指摘が変わりながら減っていく)。
+  次のどちらかに当たったら、回数に関係なく止まり、状況と残りの課題をユーザーに報告して指示を仰ぐ。
+  - 10 回修正を頼んでもゴールに届かない
+  - 同じ指摘が 2 往復続けて片付かない、または直した所が次の往復で元に戻る(前に進んでいない)
+
+  ユーザーが上限を変える・なくすと明示したときはそれに従う。
 
 ### 8. 積み重ねた PR のマージ
 
-依存する PR がある base のブランチを `--delete-branch` で先に消すと、GitHub は依存する PR の base を付け替えず閉じる。積み重ねた PR は、次の PR の base を先に main へ変えてからマージし、ブランチ削除は最後にまとめる。マージの権限が与えられているときは、orchestrator が自分で判断して行い、ユーザーにマージを頼まない。
+後ろの PR が base にしているブランチを `--delete-branch` で先に消すと、GitHub は後ろの PR の base を付け替えずに閉じてしまう。
+積み重ねた PR は、次の PR の base を先に main へ変えてからマージし、ブランチの削除は最後にまとめて行う。
+マージの権限をもらっているときは、orchestrator が自分で判断してマージし、ユーザーにマージを頼まない。
 
 ### 9. 最終報告
 
-- ユーザーへ: 達成したゴール、変更概要、検証結果、往復回数、残課題(あれば)。
-
-## Gotchas
-
-- worker が dev server や workerd を止め忘れて、ポート（例 5173）を握ったまま pane を閉じることがある。レビューで実機確認の前に
-  `lsof -nP -iTCP:<port> -sTCP:LISTEN` で持ち主を確かめ、今回の worker が起動したものなら止める。task にも「撮影の後に dev server を止める」と書く。
-
-- worker は原則新規起動だが、同じ ticket の修正往復では健全な pane へ再投函できる。起動時の skill 一覧しか知らないことがある。worker が直接呼ぶのは
-  `mark_report_done.sh` のみ(tmux/herdr の送信スクリプトは投函側の courier が使う)なので、タスクファイルには
-  **`mark_report_done.sh` の絶対パスと report ファイルの絶対パス**を明記する。
-- 報告メッセージは「どのタスクの報告か」を識別できるよう、必ずタスク名(slug)を含めさせる。Herdr では
-  `origin=<pane-id>` と `worker=<role>/<pane-id>`、tmux では `origin=<pane-id>` と `worker=<pane-id>` を必ず含める。
-- worker が報告ファイルだけ書いて `mark_report_done.sh` の実行を忘れると着弾しない。タスクファイルの報告手順は
-  「ブロック時も必ず報告」「done マーカー作成が完了条件の一部」と明記する。
-- pi を含め、worker の最終回答を pane 間で中継する機能には依存しない。報告が起動元 pane に見当たらない場合は
-  worker の応答を待ち直したり pane から転記したりせず、manifest の `report_file` とその `.done` /
-  `.delivered` / `.undeliverable`、および `route_file.courier.log` を確認する。
-  `.done` が無ければ worker が報告処理まで完了していない。receipt が `confirmed=unconfirmed` なら送信コマンドは
-  成功しているが着弾未確認なので、report を読み Workflow 6 へ進む。`.undeliverable` または courier log のエラーなら
-  配送失敗として扱い、宛先を推測して再送しない。
-- 宛先 pane が途中で消えた配送不能は、実装上の `ブロック` ではない。配送と配送不能の記録は courier
-  (`deliver_report.sh`) が行う。`mark_report_done.sh` は done マーカーを書いた後、courier の配送 receipt を
-  最大 60 秒待ってから終了する(受け取れなければ非 0 で終了する)。同じ report パスで再実行すると
-  「記録済み」エラー(exit 1)になるので、タイムアウト後もマーカーの再作成はできない。worker は宛先を
-  role や環境変数から推測しない。
-- worker pane は報告後に閉じるため、あとで pane scrollback に頼らない。必要な事実は必ず report ファイルへ書かせる。
-- `/tmp` の成果物は永続しない。セッションをまたぐ計画・レポート・検証ログは Workflow 6 の手順で
-  `~/.local/state/agent-orchestrate/<slug>/` へ退避しておく。退避を怠ると、次ラウンドの worker が
-  「必読の計画ファイルが無い」でブロックしたり、裏取り不能で全量再実行になる。
-- `HERDR_PANE_ID` / `TMUX_PANE` は投函側が manifest を生成する瞬間のローカル検証専用であり、task / worker / 報告の受け渡しに使わない。
-- 会話の再開(compaction)の後、Claude Code の Bash から `TMUX_PANE` が空になることがある。空のまま `tmux split-window -t "$TMUX_PANE"` すると、
-  `-t ""` が別セッションのアクティブな pane を分割し、worker がユーザーの別の作業のウィンドウに出た(`tmux join-pane -h -s <worker> -t <自分>` で戻した)。
-  `report_route.sh` も `TMUX_PANE is not available` で止まる。最初の投函で確かめた自分の pane id を控えておき、再開後は
-  `tmux list-panes -a -F '#{pane_id} #{session_name}:#{window_index} #{pane_title}'` で生きていることを確かめてから、分割先と
-  `TMUX_PANE=<自分の pane id> bash report_route.sh ...` に明示する。分からなければ分割しない。
-- courier は macOS 標準 Bash 3.2 と WSL Bash 5 の両方で動かす。スクリプトは Bash 3.2 互換を保ち、連想配列など Bash 4 以降の構文を使わない(Bash 3.2 では配送開始前に構文エラーで終了し、報告が届かない)。
-- codex sandbox(`workspace-write` でも)は unix socket への connect を遮断するため、tmux も herdr も直接
-  叩くと EPERM になる。claude / pi の既定 sandbox でも同様に遮断される前提で扱い、
-  agent の種類にかかわらず worker から tmux/herdr を直接叩く手順を task に書かない。一方 host の `/tmp` は
-  いずれの sandbox からも読み書きできるため、報告は必ず `mark_report_done.sh`(done マーカー経由)を使わせる。
-- codex / claude はそれぞれ自前の plan の手順に従い「実装前の設計承認」を pane 内の対話で
-  求めて止まることがある。task-template の
-  「対話承認の禁止」節が先回りの対策であり、agent の種類によらず必ず残す。それでも承認待ちで止まった
-  場合に限り、orchestrator が同じ pane へ 1 回だけ承認/裁定を送って再開させる(これは中断済み worker の
-  再開であり、新規タスクの追投函ではない)。
-  ユーザーには運ばない。
-- claude worker は、そのリポジトリで初めて起動したときに「フォルダを信頼するか」の確認ダイアログで
-  止まることがある。`ensure_worker_pane.sh` の準備完了マーカー(`Ctx:`)はこのダイアログ
-  では出ないため、tmux 経路・Herdr 経路のどちらでも自動では突破せず待機タイムアウトへ落ちる。task を送る前に
-  `tmux capture-pane -p -t "$worker" | tail -15`(Herdr は `herdr pane read`)でこのダイアログが出ていないか
-  確認し、出ていたら orchestrator が 1 回だけ `Enter`(既定選択の「1. Yes, I trust this folder」)を送って
-  解消してから task を投函する。これは初回起動時の環境確認であり、task 実行中の設計承認とは別物なので、
-  同じ pane への 1 回限りの介入として扱ってよい。
-- codex worker も同様に、そのリポジトリで初めて起動したときに **「ディレクトリ信頼」と「hooks 信頼」の
-  2 段**の確認ダイアログで止まることがある。claude と違い 2 回応答が要るため、1 回
-  `Enter` を送っただけでは 2 段目で止まったままになる。この状態で task を投函すると本文が丸ごと吸われ、
-  worker が何もせずに終了する。準備完了マーカー(`›` プロンプト)が出るまで `tmux capture-pane` で確認し、
-  ダイアログが出ていたら**残っている段の数だけ**応答してから投函する。既に同じリポジトリで codex を
-  起動したことがあるセッションでは出ない(1 段目で `ensure_worker_pane.sh`
-  の準備完了判定が通り、ダイアログに遭遇しないこともある)ため、「前回出なかったから今回も出ない」と
-  仮定せず毎回確認する。
-- pi を 1 window に 3 台以上続けて `ensure_worker_pane.sh` で起動すると、3 台目以降の pane 幅が 10 桁ほどに縮み、準備完了
-  マーカー `(auto)` が画面に収まらず 30 秒で「起動しなかった」になる（pi 自体は起動している。2026-09-14 実測）。
-  `tmux select-layout -t <session:window> tiled` で全 pane を均等にしてから `capture-pane` で `(auto)` を見直す。
-  5 台並列でも pane が 69x16 あれば動いた。
-- 並行の worker に E2E（実サーバーを起動するテスト）を同時に回させない。ファイルが重ならないことは安全の条件にならない。
-  dev サーバーは作業ツリー全体を読むので、別 worker の書きかけのコードで無関係に落ちる（ある repo で 2 回落ちて
-  緑を確認できなかった）。E2E は直列にするか、worktree ごとに E2E のポートも分ける。worktree を分けても Playwright の
-  `reuseExistingServer` が固定ポートを取り合い、他の worktree のサーバーに当たる。
+- ユーザーへ: 達成したゴール、変更の概要、検証の結果、往復の回数、残りの課題(あれば)。

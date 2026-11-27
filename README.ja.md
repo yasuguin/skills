@@ -22,7 +22,7 @@ npx skills@latest add yasuguin/skills --skill grill-visual
 
 ## Skills
 
-- **[agent-doctor](skills/agent-doctor)**: Claude Code の会話ログを数値で集計して、開発が遅い原因を見つけます。モデル応答・コンテキスト肥大・テスト・hook・ガードの拒否・質問の往復のどこで時間を使ったかを出し、hook を 1 本ずつ実測して、遅さを生んでいるルールの場所まで辿ります。利用を API の定価に換算する道具も付いています。Python（`uv`）が要ります。週 1 回の自動集計まで欲しいときは、skill を同梱した [agent-doctor の plugin](plugins/agent-doctor) を代わりに入れてください（両方入れると skill が 2 つになります）。
+- **[agent-doctor](skills/agent-doctor)**: AI エージェント（Claude Code・Codex）の開発環境を 3 つの面から診断し、問題を生んでいるルールの場所まで辿って、承認したものだけ直します。主役はルールの最適化です。instruction file や skill に文章で書いたルールを棚卸しし、settings・hook・agent 定義・Codex の rules と profile・lint・test の機械的な強制へ移し、重複を削り、書いてあることと実際の強制のずれを直します。速度の診断は、会話ログと hook の実測から開発が遅い原因を見つけます。コストの診断は、利用を API の定価に換算し、料金を押し上げているもの（サブエージェントの型・project・セッション・キャッシュ読み）を見つけます。Python（`uv`）が要ります。週 1 回の自動集計まで欲しいときは、skill を同梱した [agent-doctor の plugin](plugins/agent-doctor) を代わりに入れてください（両方入れると skill が 2 つになります）。
 - **[agent-orchestrate](skills/agent-orchestrate)**: tmux（または Herdr）の pane で動く codex・claude・pi に実装を任せ、完了報告のレビューと再依頼を繰り返してゴールまで進めます。pane へ確実に届ける送り方（Enter の分離・着弾の確認・時刻指定の送信）も持っています。
 - **[ask-me](skills/ask-me)**: エージェントが聞きたいことを長い文章にまとめて返してきたとき、その問いを 1 論点 1 問の質問カードに分け直させます。全部を読んで答えを組み立てる手間をなくし、選ぶだけで答えられるようにするためのものです。
 - **[ban-rule-manager](skills/ban-rule-manager)**: 「〜は使わない」という決まりを文章で頼まず、Claude Code の PreToolUse hook で止めます。禁止の内容は JSON の registry に書くだけで、hook のエンジンは同梱しています。hook を入れる前のコードや、ほかのエージェントが書いたコードを遡ってスキャンする script も付いています。`jq` と `perl` が要ります。

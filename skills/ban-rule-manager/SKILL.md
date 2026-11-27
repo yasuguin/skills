@@ -13,7 +13,7 @@ disable-model-invocation: true
 （hook 導入前のコード、他 agent が書いたコード）を repo 横断スキャンで補う。
 
 新しい prose ルールを丸ごと hook 化する一般的な判断（何を hook 化してよいか）は
-`agent-doctor` skill のルール配置の精査（`references/rule-placement.md`）の管轄。このskillは「禁止パターン」という決まった型の
+`agent-doctor` skill のルールの最適化（`references/rule-placement.md`）の管轄。このskillは「禁止パターン」という決まった型の
 ルールに特化し、その registry と遡及スキャンの実務を担う。
 
 ## 2つの registry

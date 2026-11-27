@@ -21,25 +21,38 @@ CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 OWNERS="${GH_WRITE_OWNERS:-$HOME/.claude/gh-write-owners.txt}"
 
 WRITE='(^|[[:space:];&|(])gh[[:space:]]+(issue|pr|release|label)[[:space:]]+(create|comment|edit|close|reopen|delete|transfer|lock|unlock|pin|unpin|merge|review|ready|upload|develop)([[:space:]]|$)'
-printf '%s' "$COMMAND" | grep -Eq "$WRITE" || exit 0
+
+# 引用符の中身を外してから見る(本文に書いた gh や -R で判定が動いていた)。strip-shell-literals.pl は validate-push.sh と同じ。
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+STRIP_LITERALS="$HOOK_DIR/strip-shell-literals.pl"
+MATCH=$(printf '%s' "$COMMAND" | perl "$STRIP_LITERALS" 2>/dev/null) || MATCH="$COMMAND"
+[ -n "$MATCH" ] || MATCH="$COMMAND"
+printf '%s' "$MATCH" | grep -Eq "$WRITE" || exit 0
 
 slug_of_url() {
   # git@host:owner/repo.git・https://host/owner/repo・ssh://git@host/owner/repo を owner/repo にそろえる。
   printf '%s' "$1" | sed -E 's#\.git$##; s#^.*[:/]([^/:]+/[^/]+)$#\1#'
 }
 
-SLUG=$(printf '%s' "$COMMAND" | grep -oE '(-R|--repo)([[:space:]]+|=)[^[:space:];&|]+' | tail -n 1 | sed -E 's#^(-R|--repo)([[:space:]]+|=)##')
-SLUG=$(slug_of_url "$SLUG")
+# gh の書き込みがちょうど 1 本のときだけ、その 1 本から -R を読む。2 本以上だと、どの -R がどの書き込みのものか決められない
+# (2 本目が -R 無しで upstream に向く)ので、向き先を決めず確認に回す。
+WRITE_SEGMENT='(^|[[:space:];&|(])gh[[:space:]]+(issue|pr|release|label)[[:space:]]+(create|comment|edit|close|reopen|delete|transfer|lock|unlock|pin|unpin|merge|review|ready|upload|develop)($|[[:space:]][^;&|]*)'
+SEGMENTS=$(printf '%s' "$MATCH" | grep -oE "$WRITE_SEGMENT")
+SLUG=""
 HOW="-R の指定"
+if [ "$(printf '%s\n' "$SEGMENTS" | wc -l | tr -d ' ')" = "1" ]; then
+  SLUG=$(printf '%s' "$SEGMENTS" | grep -oE '(-R|--repo)([[:space:]]+|=)[^[:space:];&|]+' | tail -n 1 | sed -E 's#^(-R|--repo)([[:space:]]+|=)##')
+  SLUG=$(slug_of_url "$SLUG")
 
-if [ -z "$SLUG" ] && printf '%s' "$COMMAND" | grep -Eq '^[[:space:]]*gh[[:space:]][^;&|]*$' && [ -n "$CWD" ]; then
-  REMOTE=$(git -C "$CWD" config --get-regexp '^remote\..*\.gh-resolved$' 2>/dev/null | awk '$2 == "base" { sub(/^remote\./, "", $1); sub(/\.gh-resolved$/, "", $1); print $1; exit }')
-  HOW="gh repo set-default の既定"
-  if [ -z "$REMOTE" ] && [ "$(git -C "$CWD" remote 2>/dev/null | wc -l | tr -d ' ')" = "1" ]; then
-    REMOTE=$(git -C "$CWD" remote)
-    HOW="ただ 1 つの remote"
+  if [ -z "$SLUG" ] && printf '%s' "$MATCH" | grep -Eq '^[[:space:]]*gh[[:space:]][^;&|]*$' && [ -n "$CWD" ]; then
+    REMOTE=$(git -C "$CWD" config --get-regexp '^remote\..*\.gh-resolved$' 2>/dev/null | awk '$2 == "base" { sub(/^remote\./, "", $1); sub(/\.gh-resolved$/, "", $1); print $1; exit }')
+    HOW="gh repo set-default の既定"
+    if [ -z "$REMOTE" ] && [ "$(git -C "$CWD" remote 2>/dev/null | wc -l | tr -d ' ')" = "1" ]; then
+      REMOTE=$(git -C "$CWD" remote)
+      HOW="ただ 1 つの remote"
+    fi
+    [ -n "$REMOTE" ] && SLUG=$(slug_of_url "$(git -C "$CWD" remote get-url "$REMOTE" 2>/dev/null)")
   fi
-  [ -n "$REMOTE" ] && SLUG=$(slug_of_url "$(git -C "$CWD" remote get-url "$REMOTE" 2>/dev/null)")
 fi
 
 OWNER="${SLUG%%/*}"

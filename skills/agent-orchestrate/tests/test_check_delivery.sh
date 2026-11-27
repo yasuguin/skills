@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # check_delivery.sh の必須テスト・lint 抑制・lint 設定変更の照合を確認する。
 set -euo pipefail
+# 使う人の全体の git 設定（commit-msg の hook など）に左右されないよう、一時 repo では読まない。
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 script="$source_dir/scripts/check_delivery.sh"
@@ -25,6 +27,8 @@ cat > "$task" <<'EOF'
 - lint の設定ファイルの変更は既定で失敗する
 - lint の設定の変更を許す見出しがあれば警告だけにする
 - 必須テストの見出しが無い task は照合を飛ばす
+- 未追跡の新しいソースの lint の無効化も見つける
+- 入れ子の test ディレクトリのテストも数える
 EOF
 
 fail() {
@@ -56,6 +60,8 @@ cat >> "$repo/tests/first.sh" <<'EOF'
 # lint の設定の変更を許す見出しがあれば警告だけにする
 # 必須テストの見出しが無い task は照合を飛ばす
 EOF
+mkdir -p "$repo/packages/a/test"
+printf '%s\n' '# 未追跡の新しいソースの lint の無効化も見つける' '# 入れ子の test ディレクトリのテストも数える' > "$repo/packages/a/test/x.sh"
 run_check
 { [[ $status -eq 0 ]] && [[ "$output" == *"check_delivery: status=pass"* ]]; } || fail "$LINENO"
 
@@ -78,6 +84,12 @@ run_check
 { [[ $status -eq 1 ]] && [[ "$output" == *"oxlint-disable"* ]] && [[ "$output" == *"warning"* ]]; } || fail "$LINENO"
 rm -f "$repo/.eslintrc.json"
 sed -i.bak '/oxlint-/d' "$repo/tests/first.sh" && rm -f "$repo/tests/first.sh.bak"
+
+# 未追跡の新しいソースの lint の無効化も見つける（テストの形をしていないファイルも、未追跡なら全行を見る）
+printf '%s\n' '// eslint-'"disable" 'const x = 1;' > "$repo/new.ts"
+run_check
+{ [[ $status -eq 1 ]] && [[ "$output" == *"eslint-disable"* ]]; } || fail "$LINENO"
+rm -f "$repo/new.ts"
 
 # 必須テストの見出しが無い task は照合を飛ばす
 no_tests_task="$test_dir/no-tests.md"

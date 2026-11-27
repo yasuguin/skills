@@ -25,14 +25,12 @@ added_file=$(mktemp /tmp/check-delivery-added.XXXXXX)
 cleanup() { rm -f "$added_file"; }
 trap cleanup EXIT
 
-# 未追跡のテストファイルは内容全体を追加行として扱う。
+# 未追跡のファイルは内容全体を追加行として扱う。テストの形をしたものに絞ると、新しいソースの lint の無効化と、
+# 入れ子の test/ に置いた必須テストを見落とす。バイナリは読まない。
 while IFS= read -r file; do
-  [[ -n "$file" ]] || continue
-  case "$file" in
-    tests/*|test/*|*/*tests/*|*.test.*|*.spec.*|__tests__/*)
-      awk -v file="$file" '{ print file ":" NR ":" $0 }' "$repo/$file" >> "$added_file"
-      ;;
-  esac
+  [[ -n "$file" && -f "$repo/$file" ]] || continue
+  grep -Iq . "$repo/$file" || continue
+  awk -v file="$file" '{ print file ":" NR ":" $0 }' "$repo/$file" >> "$added_file"
 done < <(git -C "$repo" ls-files --others --exclude-standard)
 
 # tracked diff の結果を追加行ファイルへ保存する（上の表示用抽出を再利用）。

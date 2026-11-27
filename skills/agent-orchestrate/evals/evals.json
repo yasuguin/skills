@@ -40,7 +40,7 @@
         "tmux でも Herdr でもないため orchestrator になれないと判断する",
         "worker を起動せず、route manifest も作らずに停止する",
         "tmux / Herdr 内でセッションを開き直すようユーザーへ依頼する",
-        "モデルが Fable でないことを理由にせず、前提チェックの失敗として扱う",
+        "特定のモデルでないことを理由にせず、前提チェックの失敗として扱う",
         "自分で実装を始めたり、ポーリングなど別手段で代替したりしない"
       ]
     },
@@ -51,7 +51,7 @@
         "in-process の sub-agent ではなく tmux / Herdr の pane worker へ委譲する",
         "初回は ensure_worker_pane.sh で worker を新規起動し、修正往復では健全な pane の続投を選べる",
         "worker role を implementer / reviewer / investigator / verifier から選ぶ",
-        "モデル名で手順を分岐させず、Fable と同じ rule と完了条件で進める",
+        "モデル名で手順を分岐させず、どのモデルでも同じ rule と完了条件で進める",
         "orchestrator 自身はゴール設定・タスクファイル作成・レビュー・判定・コミットに専念する"
       ]
     },
@@ -70,7 +70,7 @@
       "prompt": "実装と検証の完了後、mark_report_done.sh で done マーカーを書いた。依頼側の pane は消えている可能性がある。worker が行うべき報告処理を示せ。",
       "expected": [
         "作業結果の report を残す",
-        "mark_report_done.sh は done マーカーを書いて正常終了する(検知と配送は投函側の courier が行う)",
+        "mark_report_done.sh は done マーカーを書いたあと配送の結果を最大 60 秒待ち、配送できなければ 0 以外で終わる(検知と配送は投函側の courier が行う)",
         "同じ report パスで mark_report_done.sh を再実行しない",
         "role・環境変数・以前の task から宛先を推測して自力で送信しようとしない",
         "最終応答で done マーカー記録済みであることを明記する"

@@ -152,6 +152,81 @@ class ApiCostTests(unittest.TestCase):
 
         self.assertAlmostEqual(report.total, 40 + 20 * 1.1)
 
+    def assertAxesSumToTotal(self, report: ac.Report) -> None:
+        self.assertAlmostEqual(sum(report.by_agent.values()), report.total)
+        self.assertAlmostEqual(sum(report.by_project.values()), report.total)
+        self.assertAlmostEqual(sum(report.by_model.values()), report.total)
+        self.assertAlmostEqual(sum(report.by_kind.values()), report.total)
+
+    def test_エージェント別はmainとサブエージェントの型ごとに分け型不明は1つにまとめる(self) -> None:
+        self.write("p/s.jsonl", [row("claude-opus-5-5", usage(out=1_000_000), mid="main")])
+        self.write("p/s/subagents/agent-a.jsonl", [row("claude-opus-5-5", usage(out=2_000_000), mid="a")])
+        (self.root / "p/s/subagents/agent-a.meta.json").write_text(json.dumps({"agentType": "Explore"}), encoding="utf-8")
+        self.write("p/s/subagents/agent-b.jsonl", [row("claude-opus-5-5", usage(out=1_000_000), mid="b")])
+        self.write("p/s/subagents/agent-c.jsonl", [row("claude-opus-5-5", usage(out=1_000_000), mid="c")])
+        (self.root / "p/s/subagents/agent-c.meta.json").write_text(json.dumps({"description": "無名"}), encoding="utf-8")
+
+        report = self.run_period()
+
+        self.assertEqual(report.by_agent.keys(), {"main", "Explore", "subagent(不明)"})
+        self.assertAlmostEqual(report.by_agent["main"], 20)
+        self.assertAlmostEqual(report.by_agent["Explore"], 40)
+        self.assertAlmostEqual(report.by_agent["subagent(不明)"], 40)
+        self.assertAxesSumToTotal(report)
+
+    def test_プロジェクト別はprojects直下のディレクトリ名ごとに分ける(self) -> None:
+        self.write("alpha/s.jsonl", [row("claude-opus-5-5", usage(out=1_000_000), mid="a")])
+        self.write("beta/s/subagents/agent-x.jsonl", [row("claude-opus-5-5", usage(out=3_000_000), mid="b")])
+
+        report = self.run_period()
+
+        self.assertAlmostEqual(report.by_project["alpha"], 20)
+        self.assertAlmostEqual(report.by_project["beta"], 60)
+        self.assertAxesSumToTotal(report)
+
+    def test_重複除去の勝った行の場所で全ての軸を数える(self) -> None:
+        # 同じ応答が2つのプロジェクトに写った場合、ソート順で後のファイルの行（out=2M）だけを数える
+        self.write("p1/s.jsonl", [row("claude-opus-5-5", usage(out=1_000_000), mid="m", rid="r")])
+        self.write("p2/s.jsonl", [row("claude-opus-5-5", usage(out=2_000_000), mid="m", rid="r")])
+
+        report = self.run_period()
+
+        self.assertAlmostEqual(report.total, 40)
+        self.assertEqual(report.by_project, {"p2": 40})
+        self.assertEqual(report.responses, 1)
+        self.assertAxesSumToTotal(report)
+
+    def test_金額の高いセッション上位5件はサブエージェントを親に含めて並べる(self) -> None:
+        for i in range(1, 7):
+            self.write(f"p/s{i}.jsonl", [row("claude-opus-5-5", usage(out=i * 1_000_000), mid=f"m{i}")])
+        # s1 にサブエージェントを足すと、親セッションの金額が上位に入る
+        self.write("p/s1/subagents/agent-x.jsonl", [row("claude-opus-5-5", usage(out=10_000_000), mid="sub")])
+
+        report = self.run_period()
+
+        self.assertEqual(len(report.top_sessions), 5)
+        self.assertEqual([s["session_id"] for s in report.top_sessions], ["s1", "s6", "s5", "s4", "s3"])
+        self.assertEqual(report.top_sessions[0]["project"], "p")
+        self.assertAlmostEqual(report.top_sessions[0]["cost"], 220)
+        self.assertEqual(report.top_sessions[0]["responses"], 2)
+
+    def test_1応答あたりのキャッシュ読みは全応答の読みトークンの平均(self) -> None:
+        self.write(
+            "p/s.jsonl",
+            [
+                row("claude-opus-5-5", usage(read=1_000_000), mid="a"),
+                row("claude-opus-5-5", usage(read=3_000_000), mid="b"),
+            ],
+        )
+
+        report = self.run_period()
+
+        self.assertAlmostEqual(report.cache_read_per_response, 2_000_000)
+
+    def test_daysは今日を含む直近N日を期間にする(self) -> None:
+        self.assertEqual(ac.period_of_days(7, date(2026, 11, 27)), (date(2026, 11, 21), date(2026, 11, 27)))
+        self.assertEqual(ac.period_of_days(1, date(2026, 11, 27)), (date(2026, 11, 27), date(2026, 11, 27)))
+
 
 if __name__ == "__main__":
     unittest.main()

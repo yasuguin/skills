@@ -33,7 +33,7 @@
     {
       "name": "agent-doctor",
       "source": "./plugins/agent-doctor",
-      "description": "The agent-doctor skill plus a weekly automatic report. At session start, if 7 days have passed since the last report, it aggregates in the background and tells you in the next session about anomalies slowing development down. / agent-doctor の skill と、週 1 回の自動集計。セッション開始時に前回の集計から 7 日経っていれば裏で集計し、開発を遅くしている異常があれば次のセッションで知らせる。"
+      "description": "The agent-doctor skill plus a weekly automatic report. At session start, if 7 days have passed since the last report, it aggregates speed and API-price cost in the background and tells you in the next session about anomalies slowing development down, or a doubled cost per active day. / agent-doctor の skill と、週 1 回の自動集計。セッション開始時に前回の集計から 7 日経っていれば速度と API 定価での料金を裏で集計し、開発を遅くしている異常か、稼働日 1 日あたりの料金の倍増があれば次のセッションで知らせる。"
     }
   ]
 }

@@ -9,8 +9,12 @@
 対象: projects ディレクトリ配下の *.jsonl（subagents/ を含む）。ファイルへの書き込みはしない。
 期間は --tz の暦日で切る（既定は日本時間）。
 
+出る内訳: モデル別・種別・エージェント別（main とサブエージェントの型）・プロジェクト別・金額の高いセッション上位5件（サブエージェント込み）・応答あたりのキャッシュ読み。
+各軸の合計は総額と一致する（重複除去は応答単位で、どの軸でも同じ行を数える）。
+
 使い方:
   uv run api_cost.py --since 2026-10-01 --until 2026-10-28 [--projects-dir DIR] [--tz Asia/Tokyo] [--json]
+  uv run api_cost.py --days 7   # 今日を含む直近 7 日
 """
 
 from __future__ import annotations
@@ -21,7 +25,8 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -61,6 +66,9 @@ US_GEO_MULTIPLIER = 1.1
 
 KINDS = ("input", "cache_write_5m", "cache_write_1h", "cache_read", "output")
 DATE_SUFFIX = re.compile(r"-\d{8}$")
+MAIN_AGENT = "main"
+UNKNOWN_AGENT = "subagent(不明)"
+TOP_SESSIONS = 5
 
 
 class UnpricedUsage(Exception):
@@ -75,6 +83,10 @@ class Report:
     tokens_by_kind: dict[str, int] = field(default_factory=lambda: dict.fromkeys(KINDS, 0))
     active_days: int = 0
     responses: int = 0
+    by_agent: dict[str, float] = field(default_factory=dict)
+    by_project: dict[str, float] = field(default_factory=dict)
+    top_sessions: list[dict[str, object]] = field(default_factory=list)
+    cache_read_per_response: float = 0.0
 
 
 def normalize_model(model: str) -> str:
@@ -135,12 +147,12 @@ def priced_parts(message_model: str, u: dict) -> list[tuple[str, dict[str, int],
 
 
 def iter_responses(projects_dir: Path):
-    """(message.id, requestId) ごとに最後の行を返す。
+    """(message.id, requestId) ごとに最後の行を (そのファイルのパス, 行) で返す。
 
     Claude Code は1つの応答を content block ごとに複数行書き、resume すると別ファイルにも同じ応答を写す。
     数え直さないよう組で重複を除き、出力トークンは書き終えた最後の行の値を使う。
     """
-    latest: dict[tuple[str, str], dict] = {}
+    latest: dict[tuple[str, str], tuple[Path, dict]] = {}
     for path in sorted(projects_dir.rglob("*.jsonl")):
         with path.open(encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -153,14 +165,39 @@ def iter_responses(projects_dir: Path):
                 message = row.get("message") or {}
                 if row.get("type") != "assistant" or not message.get("usage"):
                     continue
-                latest[(message.get("id"), row.get("requestId"))] = row
+                latest[(message.get("id"), row.get("requestId"))] = (path, row)
     return latest.values()
+
+
+@lru_cache(maxsize=None)
+def agent_label(path: Path) -> str:
+    """サブエージェントの型を隣の .meta.json の agentType で返す。応答の行ごとに読み直さないよう、ファイル単位で覚える。"""
+    try:
+        agent_type = json.loads(path.with_suffix(".meta.json").read_text(encoding="utf-8")).get("agentType")
+    except (OSError, ValueError, AttributeError):
+        return UNKNOWN_AGENT
+    return agent_type or UNKNOWN_AGENT
+
+
+def owner_of(path: Path, projects_dir: Path) -> tuple[str, str, str]:
+    """ログのパスから (プロジェクト名, セッションID, エージェント) を決める。
+
+    サブエージェントは projects/<project>/<session>/subagents/ の下にあるので、親セッションに数える。
+    """
+    parts = path.relative_to(projects_dir).parts
+    project = parts[0]
+    if len(parts) >= 4 and parts[2] == "subagents":
+        return project, parts[1], agent_label(path)
+    session = parts[1] if len(parts) > 2 else path.stem
+    return project, session, MAIN_AGENT
 
 
 def analyze(projects_dir: Path, since: date, until: date, tz: ZoneInfo = ZoneInfo("Asia/Tokyo")) -> Report:
     report = Report()
     days: set[date] = set()
-    for row in iter_responses(projects_dir):
+    # (プロジェクト, セッション) ごとの [金額, 応答数]
+    sessions: dict[tuple[str, str], list] = {}
+    for path, row in iter_responses(projects_dir):
         message = row["message"]
         if message.get("model") in (None, "<synthetic>"):
             continue
@@ -169,14 +206,29 @@ def analyze(projects_dir: Path, since: date, until: date, tz: ZoneInfo = ZoneInf
             continue
         days.add(day)
         report.responses += 1
+        project, session, agent = owner_of(path, projects_dir)
+        response_cost = 0.0
         for model, tokens, prices in priced_parts(message["model"], message["usage"]):
             for kind, price in zip(KINDS, prices):
                 cost = tokens[kind] * price / 1_000_000
+                response_cost += cost
                 report.total += cost
                 report.by_kind[kind] += cost
                 report.tokens_by_kind[kind] += tokens[kind]
                 report.by_model[model] = report.by_model.get(model, 0.0) + cost
+        report.by_agent[agent] = report.by_agent.get(agent, 0.0) + response_cost
+        report.by_project[project] = report.by_project.get(project, 0.0) + response_cost
+        stat = sessions.setdefault((project, session), [0.0, 0])
+        stat[0] += response_cost
+        stat[1] += 1
     report.active_days = len(days)
+    if report.responses:
+        report.cache_read_per_response = report.tokens_by_kind["cache_read"] / report.responses
+    ranked = sorted(sessions.items(), key=lambda kv: -kv[1][0])[:TOP_SESSIONS]
+    report.top_sessions = [
+        {"session_id": session, "project": project, "cost": cost, "responses": responses}
+        for (project, session), (cost, responses) in ranked
+    ]
     return report
 
 
@@ -204,18 +256,38 @@ def render(report: Report, since: date, until: date) -> str:
         lines.append(
             f"  {KIND_LABELS[kind]:<16} ${report.by_kind[kind]:>12,.2f}  ({report.tokens_by_kind[kind]:,} トークン)"
         )
+    lines += ["", "エージェント別（サブエージェントは型ごと）:"]
+    for agent, cost in sorted(report.by_agent.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {agent:<22} ${cost:>12,.2f}")
+    lines += ["", "プロジェクト別:"]
+    for project, cost in sorted(report.by_project.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {project:<40} ${cost:>12,.2f}")
+    lines += ["", f"金額の高いセッション 上位{TOP_SESSIONS}件（サブエージェント込み）:"]
+    for s in report.top_sessions:
+        lines.append(f"  {s['session_id']}  {s['project']}  ${s['cost']:,.2f}  {s['responses']:,} 応答")
+    lines += ["", f"1 応答あたりのキャッシュ読み: {report.cache_read_per_response:,.0f} トークン"]
     return "\n".join(lines)
+
+
+def period_of_days(days: int, today: date) -> tuple[date, date]:
+    """今日を含む直近 days 日。週次の点検が OS の date コマンドの差に左右されずに期間を渡せるようにする。"""
+    return today - timedelta(days=days - 1), today
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--since", type=date.fromisoformat, required=True, help="開始日（含む）YYYY-MM-DD")
-    parser.add_argument("--until", type=date.fromisoformat, required=True, help="終了日（含む）YYYY-MM-DD")
+    parser.add_argument("--since", type=date.fromisoformat, help="開始日（含む）YYYY-MM-DD")
+    parser.add_argument("--until", type=date.fromisoformat, help="終了日（含む）YYYY-MM-DD")
+    parser.add_argument("--days", type=int, help="--since/--until の代わりに、今日を含む直近 N 日")
     default_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "projects"
     parser.add_argument("--projects-dir", type=Path, default=default_dir)
     parser.add_argument("--tz", default="Asia/Tokyo", help="期間を切る暦日のタイムゾーン")
     parser.add_argument("--json", action="store_true", help="JSON で出す")
     args = parser.parse_args()
+    if args.days:
+        args.since, args.until = period_of_days(args.days, datetime.now(ZoneInfo(args.tz)).date())
+    elif not (args.since and args.until):
+        parser.error("--since と --until、または --days を指定する")
 
     try:
         report = analyze(args.projects_dir, args.since, args.until, ZoneInfo(args.tz))

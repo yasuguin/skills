@@ -68,8 +68,9 @@ description: "会話中のユーザーフィードバック、繰り返しの修
 
 - goal: 会話から、skill の改善に値する signal を拾う
 - rules:
-  - signal を「明示依頼」「反復 pain」「仕様ずれ」「完了条件ずれ」のどれかに分類する。どれに当たるか迷うとき、明示されていない痛みを拾うときは
+  - skill の改善に値する signal か(skill にしない方がよいものか)迷うとき、明示されていない痛みを拾うときは、
     [references/trigger-signals.md](references/trigger-signals.md) の例と照らす
+  - 拾った signal は「明示依頼」「反復 pain」「仕様ずれ」「完了条件ずれ」のどれかに分類する
   - 期待どおりに止まれた事例も signal になる。範囲を広げずに止まれた、差分が 0% だと気づいて終えられた、が評価されたら、使い回せる停止条件として書けるかを考える
   - ユーザーが「そこは毎回聞かなくてよい」のように確認を止めたら、`反復 pain` として扱う
   - ユーザーが既存の手編集の差分を比べる材料にしたいと言ったら、signal を認める前に、その差分を単独の commit か明示の diff に固定する
@@ -121,6 +122,8 @@ description: "会話中のユーザーフィードバック、繰り返しの修
 - rules:
   - 足す前に、本当に AGENTS.md / CLAUDE.md ではなく skill に置くべきかを確かめる
   - 文書の書き方(何を書き、何を削るか)は `writing-for-agents` に従う
+  - 文書に Python を実行する検証・補助のコマンドを書くときは、ユーザーや repo の指示が無い限り `uv run --no-project python ...` で書く
+    (`python3 ...` を既定の例にしない)
   - SKILL.md の本文は 500 行以内を目安にし、超えるなら `references/` に分ける。ただし外部の skill(hono など)は、upstream に追従しやすいよう分けない
   - 実害のある見逃しや手戻りを一般化するときは、対象の skill の evals と references に入れる(skill-kaizen 自身ではなく、該当の skill に積む)
   - eval の形式は目的で選ぶ。2 つの形式は互換ではないが、併存してよい
@@ -163,8 +166,7 @@ description: "会話中のユーザーフィードバック、繰り返しの修
   - frontmatter を更新したら、YAML として読めることを確かめる
   - 見出し・決まった言い回し・マーカーの文字列を書き換えたら、scripts / hooks / evals がその文字列を照合していないかを grep で確かめる。
     書き換えの前と後で、コードブロックとインラインコードを抜き出して比べると、意図しない変更を機械で見つけられる
-  - Python の script を足した・直したら `uv run --no-project python -m py_compile <file...>` を実行する。Python を実行する検証・補助のコマンドは、
-    ユーザーや repo の指示が無い限り `uv run --no-project python ...` で書く(`python3 ...` を既定の例にしない)
+  - Python の script を足した・直したら `uv run --no-project python -m py_compile <file...>` を実行する
   - `git diff --check` を実行する
   - 配備先へ反映する仕組みがあるなら、差分を確かめて要る path だけを反映し、反映後に配備先を確かめ直す
 

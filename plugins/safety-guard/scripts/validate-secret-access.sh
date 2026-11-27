@@ -60,7 +60,7 @@ fi
 [[ -z "$COMMAND" ]] && exit 0
 
 # 内容を読み出せるコマンドのみ対象 (ls 等の一覧系は許可)
-READER_RE='(^|[[:space:];&|(])(cat|head|tail|less|more|bat|grep|rg|sed|awk|cut|paste|sort|uniq|strings|xxd|od|base64|openssl|cp|scp|rsync|tee|dd|age)([[:space:]]|$)'
+READER_RE='(^|[[:space:];&|(])(cat|head|tail|less|more|bat|grep|rg|sed|awk|cut|paste|sort|uniq|strings|xxd|od|base64|openssl|cp|scp|rsync|tee|dd|age|nl|diff|jq|python3?|node|deno|bun|ruby|perl|php|bash|sh|zsh|source)([[:space:]]|$)|(^|[;&|(])[[:space:]]*\.[[:space:]]'
 echo "$COMMAND" | grep -qE "$READER_RE" || exit 0
 
 # 雛形から .env を作る `cp .env.example .env` は読み出しではないので外す（2026-11-26 ユーザー決定。親 issue #14）。
@@ -90,7 +90,9 @@ CLEAN=$(printf '%s\n' "$CLEAN" | perl -e '
   # 鍵のパスを検索語に書いただけで止まっていた。対象のファイルは引用符の外に残るので、読み出しは止まる。
   my $q = qr{\x27[^\x27]*\x27|"(?:[^"\\]|\\.)*"};
   $s =~ s{(\b(?:grep|rg|ag|ack)\b(?:\s+-[-\w=]+)*\s+)$q}{$1}g;
-  $s =~ s{((?:^|\s)(?:-m|--message|-e|--regexp)(?:=|\s+))$q}{$1}g;
+  $s =~ s{((?:^|\s)(?:-m|--message)(?:=|\s+))$q}{$1}g;
+  # -e は node -e / perl -e / ruby -e ではコード本体なので、検索語として外すのは grep 系の行だけ
+  $s =~ s{(\b(?:grep|rg|ag|ack)\b[^|;&\n]*?\s(?:-e|--regexp)(?:=|\s+))$q}{$1}g;
   # 公開の CA の名簿（certifi の cacert.pem）は秘密ではない（2026-11-26 ユーザー決定）
   $s =~ s{\S*/certifi/cacert\.pem}{}g;
   print $s;

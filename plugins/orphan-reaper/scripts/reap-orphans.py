@@ -115,13 +115,19 @@ def main():
     # 会話の記録がこの間更新されていなければ、その会話は終わったとみなす（PID を渡さない Codex 用）
     parser.add_argument("--idle-minutes", type=float, default=15)
     parser.add_argument("--codex-home", default=os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+    # テストがホストの実プロセスを拾わないよう、走査する uid を差し替える口
+    parser.add_argument("--uid", type=int, default=None)
     args = parser.parse_args()
 
-    me = os.getuid()
+    me = args.uid if args.uid is not None else os.getuid()
     table = process_table()
     stopped, serving = [], []
     for pid, (ppid, uid, age, command) in table.items():
         if ppid != 1 or uid != me or age < args.min_age_minutes * 60:
+            continue
+        if "deliver_report.sh" in command:
+            # 報告の courier は worker を待つ間 orchestrator の記録が止まるが、最大 8 時間待つ設計。
+            # 止めると [報告] も .undeliverable も残らない（courier 側に印を足せないのでコマンド名で外す）
             continue
         env = environment(pid)
         session = env.get("CLAUDE_PID", "")

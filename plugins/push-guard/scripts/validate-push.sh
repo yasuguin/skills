@@ -41,7 +41,11 @@ fi
 
 # 出力を | tail などに流す形と、2>&1・2>/dev/null の付け足しは、push 自体を変えないので外してから判定する
 # (エージェントがよく打つ形で、許可リストの repo でも止めて打ち直しになっていた。2026-11-15)。|| は外さない。
-COMMAND=$(printf '%s' "$COMMAND" | sed -E 's/[[:space:]]+\|[^|].*$//; s/[[:space:]]+[0-9]?>(&[0-9]|\/dev\/null)//g')
+# パイプ以降に ;・&・改行・別の git・$(...) が残るときは外さない(feat への push を | cat でつないだ後ろに main への push を
+# 続けた形が、feat への 1 本に読めて通っていた)。外さなければ下の単独の判定に落ちて、push 先を決められない書き方として止まる。
+COMMAND=$(printf '%s' "$COMMAND" | perl -0777 -pe '
+  s/\s+[0-9]?>(&[0-9]|\/dev\/null)//g;
+  if (/\A(.*?)\s+\|(?!\|)\s*(.*)\z/s) { my ($head, $rest) = ($1, $2); $_ = $head unless $rest =~ /[;&\n`]|\$\(|\bgit\b/ }')
 
 # 今の branch を $(...) で書く push(pr の references/submit.md の形)は HEAD と同じなので、HEAD に置き換えてから読む。
 # ほかの $(...) は何に展開されるか分からないので、下で branch を決められない書き方として扱う。
@@ -59,9 +63,13 @@ SLUG=""
 if printf '%s' "$COMMAND" | grep -Eq '^[[:space:]]*git([[:space:]]+-C[[:space:]]+[^[:space:];&|]+)?[[:space:]]+push([[:space:]][^;&|]*)?$'; then
   REPO=$(printf '%s' "$COMMAND" | awk '$2 == "-C" { print $3 }')
   REPO="${QUOTED_REPO:-${REPO:-$CWD}}"
-  # 明示した remote があればそれ、無ければ origin。
+  # 明示した remote があればそれだけで決め(取れなければ slug は空で確認へ)、無ければ origin。URL を直接渡した形はその URL で見る
+  # (origin に落とすと、許可リストの cwd の repo の slug で他人の repo への push が通った)。
   REMOTE=$(printf '%s' "$COMMAND" | awk '{ start = ($2 == "-C") ? 5 : 3; for (i = start; i <= NF; i++) if ($i !~ /^-/) { print $i; exit } }')
-  URL=$(git -C "$REPO" remote get-url "${REMOTE:-origin}" 2>/dev/null || git -C "$REPO" remote get-url origin 2>/dev/null)
+  case "$REMOTE" in
+    *[:/]*) URL="$REMOTE" ;;
+    *) URL=$(git -C "$REPO" remote get-url "${REMOTE:-origin}" 2>/dev/null) ;;
+  esac
   # git@host:owner/repo.git・https://host/owner/repo・ssh://git@host/owner/repo を owner/repo にそろえる。
   SLUG=$(printf '%s' "$URL" | sed -E 's#\.git$##; s#^.*[:/]([^/:]+/[^/]+)$#\1#')
 
@@ -108,7 +116,7 @@ fi
 # 既定ブランチの CI が赤なら、通す push に一言添える。赤の通知は Stop でしか届かないので、気づかず上に積んでいた。
 # 止めないのは、赤を直す push もここを通るため。検証の CI は push で起動しない(週 1 回と手動)ので、event で絞らない。gh が遅くても push を待たせないよう 5 秒で打ち切る。
 warn_if_red() {
-  [ "$DECISION" = "grant" ] && [ -n "$SLUG" ] || return 0
+  [ -n "$SLUG" ] || return 0
   local runs skipped="" id
   runs=$(perl -e 'alarm 5; exec @ARGV' gh run list -R "$SLUG" --branch main --status completed --limit 10 \
     --json databaseId,workflowName,conclusion,event 2>/dev/null) || return 0

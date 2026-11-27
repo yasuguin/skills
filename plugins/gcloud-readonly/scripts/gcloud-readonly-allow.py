@@ -56,6 +56,9 @@ def is_filter(words: list[str]) -> bool:
     # sort -o はファイルを書き込める
     if words[0] == "sort" and any(w == "-o" or w.startswith("--output") or re.fullmatch(r"-[a-zA-Z]*o\S*", w) for w in words):
         return False
+    # uniq の 2 つ目の位置引数は上書きされる出力ファイル（"-" は標準入力を指す位置引数）
+    if words[0] == "uniq" and sum(1 for w in words[1:] if w == "-" or not w.startswith("-")) >= 2:
+        return False
     return True
 
 
@@ -77,6 +80,10 @@ def is_gcloud_read(words: list[str]) -> bool:
             return False
         if word in READ_VERBS:
             return True
+        # add-metadata・update-traffic のようなハイフン付きの変更動詞は MUTATING_WORDS の完全一致では漏れる。
+        # node-pools のようなハイフン付きの group 名は通したいので、先頭の語だけで判定する。
+        if "-" in word and word.split("-")[0] in MUTATING_WORDS:
+            return False
         # `gcloud run ...` の run は Cloud Run の group 名であって実行動詞ではない
         is_cloud_run_group = index == 0 and word == "run"
         if word in MUTATING_WORDS and not is_cloud_run_group:

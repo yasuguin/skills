@@ -32,10 +32,15 @@ ask() {
   exit 0
 }
 
+# 伝える文は貯めるだけにして末尾でまとめて出す。ここで exit すると、後ろの
+# git rm -f・chmod・git checkout・git push --delete の検査に届かず block / ask が素通りする。
+RECOMMENDS=""
 recommend() {
-  # 自動許可する処理は無出力でも継続するため、理由の注入だけ行う。
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\n' "$1"
-  exit 0
+  if [[ -n "$RECOMMENDS" ]]; then RECOMMENDS="$RECOMMENDS / $1"; else RECOMMENDS="$1"; fi
+}
+flush_recommends() {
+  [[ -n "$RECOMMENDS" ]] || return 0
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\n' "$RECOMMENDS"
 }
 
 block() {
@@ -252,8 +257,9 @@ if matches_rm; then
       recommend "対象は git の追跡ファイルなので確認しません。ただし未 commit の変更があり、消すと HEAD 以降の差分は戻せません:$RM_MODIFIED"
     elif [[ "$RM_GIT_TRACKED" == "1" ]]; then
       recommend '対象は git の追跡ファイル (または /tmp・生成物・worktree) だけで、git から戻せるため確認しません'
+    else
+      recommend '対象が /tmp、.playwright-cli、dist/build/out/target/.next/.nuxt/.turbo、node_modules/.venv/venv/__pycache__/.pytest_cache、または worktree (.claude/worktrees/*, .worktrees/*, gwq の <repo>=<branch>) 配下のみのため rm を自動許可します'
     fi
-    recommend '対象が /tmp、.playwright-cli、dist/build/out/target/.next/.nuxt/.turbo、node_modules/.venv/venv/__pycache__/.pytest_cache、または worktree (.claude/worktrees/*, .worktrees/*, gwq の <repo>=<branch>) 配下のみのため rm を自動許可します'
   else
     ask 'rm による削除コマンドです。対象に git から戻せないファイル (未追跡・ignored・repo の外・.git) が含まれる可能性があります。対象パスと影響範囲を確認のうえ、実行してよいか承認してください'
   fi
@@ -363,14 +369,11 @@ fi
 
 if matches '(^|[[:space:];&|])git[[:space:]]+checkout[[:space:]]+-b([[:space:]]|$)'; then
   recommend 'git checkout -b は実行できますが、ブランチ作成には git switch -c を推奨します'
-fi
-if matches '(^|[[:space:];&|])git[[:space:]]+checkout[[:space:]]+--detach([[:space:]]|$)'; then
+elif matches '(^|[[:space:];&|])git[[:space:]]+checkout[[:space:]]+--detach([[:space:]]|$)'; then
   recommend 'git checkout --detach は実行できますが、detached HEAD への移動には git switch --detach を推奨します'
-fi
-if matches '(^|[[:space:];&|])git[[:space:]]+checkout[[:space:]]+HEAD([[:space:];&|]|$)'; then
+elif matches '(^|[[:space:];&|])git[[:space:]]+checkout[[:space:]]+HEAD([[:space:];&|]|$)'; then
   recommend '単独の git checkout HEAD は実行できますが、detached HEAD への移動には git switch --detach HEAD を推奨します'
-fi
-if matches '(^|[[:space:];&|])git[[:space:]]+checkout([[:space:]]|$)'; then
+elif matches '(^|[[:space:];&|])git[[:space:]]+checkout([[:space:]]|$)'; then
   recommend 'git checkout は実行できますが、ブランチ操作には git switch を推奨します'
 fi
 
@@ -420,4 +423,5 @@ if [[ -n "$precommit_check_pattern" ]] && precommit_hook_runs "$precommit_check_
   recommend 'このチェックは pre-commit hook が commit 時に自動実行します(hook の中身に同じコマンドがあります)。commit 直前の先回り確認が目的なら再実行は不要です(開発中の任意タイミングでの実行は問題ありません)'
 fi
 
+flush_recommends
 exit 0

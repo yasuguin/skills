@@ -1,0 +1,9 @@
+{
+  "name": "gcloud-readonly",
+  "description": "Lets gcloud commands mechanically judged read-only through without confirmation. Writes and anything it cannot judge go to confirmation as before. / 読み取りだけと機械的に判定できた gcloud コマンドを、確認なしで通す。書き込みや判定できないものは今までどおり確認に回る。",
+  "author": {
+    "name": "yasuguin"
+  },
+  "repository": "https://github.com/yasuguin/skills",
+  "license": "MIT"
+}

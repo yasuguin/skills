@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>grill-visual</title>
+  <style>
+    /*
+     * grill-visual の frame。serve.cjs が content fragment を #frame-content に入れて包む。
+     * 色・角丸・影は落ち着いた暖色のライトテーマ(ライトのみ。OS の設定でダークに変えない)。
+     * 右上の操作バー・指示のパネル・微調整のパネル・コメントの操作は companion-ui.js が動かす。
+     * --bg-* / --text-* / --accent などの変数名は、既存の mockup が読んでいるので名前を変えない。
+     */
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
+
+    /* ===== テーマ(new-claude) ===== */
+    :root {
+      --bg-primary: #f9f9f9;
+      --bg-secondary: #ffffff;
+      --bg-tertiary: #f2f2f2;
+      --border: #e0e0e0;
+      --line: #ebebeb;
+      --text-primary: #181818;
+      --text-secondary: #666666;
+      --text-tertiary: #878787;
+      --accent: #181818;
+      --accent-hover: #333333;
+      --state: #257de0;
+      --state-track: #e4effb;
+      --brand: #f2157f;
+      --hover: #eaeaea;
+      --pressed: #dddddd;
+      --success: #2f8a4c;
+      --warning: #b26a00;
+      --error: #a42528;
+      --selected-bg: var(--state-track);
+      --selected-border: var(--state);
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 10px;
+      --radius-xl: 14px;
+      --shadow-float: 0 0 12px rgba(0, 0, 0, 0.08);
+      --shadow-popover: 0 12px 36px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06);
+      --shadow-focus: inset 0 0 0 1px #ffffff, 0 0 0 1px #257de0, 0 0 6px 1px rgba(37, 125, 224, 0.12);
+      --tweaks-width: 300px;
+      color-scheme: light;
+    }
+
+    body {
+      font-family: 'Inter Variable', Inter, 'Noto Sans JP Variable', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 15px;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    :focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+
+    /* ===== 外枠: 本文と、開いたときだけ右に並ぶ微調整のパネル ===== */
+    .gv-layout { display: flex; height: 100%; }
+    .main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    /* 上は右上の操作バーの分、下は最後の欄が窮屈にならない分を空ける */
+    #frame-content { position: relative; max-width: 1200px; margin: 0 auto; padding: 4.5rem 2rem 6rem; min-height: 100%; }
+
+    /* ===== 右上の操作バー ===== */
+    .gv-bar {
+      position: fixed; top: 12px; right: 16px; z-index: 20;
+      display: flex; align-items: center; gap: 2px; padding: 4px;
+      background: rgba(255, 255, 255, 0.86); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--line); border-radius: 9999px; box-shadow: var(--shadow-float);
+    }
+    .gv-btn {
+      font: inherit; font-size: 13px; line-height: 1; height: 32px; padding: 0 12px; white-space: nowrap;
+      border: 0; border-radius: 9999px; background: transparent; color: var(--text-primary); cursor: pointer;
+      font-variant-numeric: tabular-nums; transition: background-color 0.15s ease;
+    }
+    .gv-btn:hover { background: var(--hover); }
+    .gv-btn[aria-pressed="true"], .gv-btn[aria-expanded="true"] { background: var(--pressed); }
+    .gv-btn.gv-primary { background: var(--accent); color: #fff; }
+    .gv-btn.gv-primary:hover { background: var(--accent-hover); }
+    .gv-icon { width: 16px; height: 16px; flex-shrink: 0; }
+    .gv-split { display: flex; align-items: center; }
+    .gv-split .gv-btn { display: inline-flex; align-items: center; gap: 6px; }
+    .gv-split-main { border-radius: 9999px 0 0 9999px; padding: 0 10px 0 12px; }
+    .gv-split-caret { border-radius: 0 9999px 9999px 0; padding: 0 10px 0 8px; box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.24); }
+    .gv-split-caret .gv-icon { width: 14px; height: 14px; transition: transform 0.15s ease; }
+    .gv-split-caret[aria-expanded="true"] { background: var(--accent-hover); }
+    .gv-split-caret[aria-expanded="true"] .gv-icon { transform: rotate(180deg); }
+    .gv-progress[data-done="true"] { color: var(--state); }
+    .gv-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+
+    /* 接続の状態。つながっている間は点だけ、それ以外は文字も出す(client.js が data-state を付ける) */
+    .status { display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 12px; color: var(--status-color, var(--text-tertiary)); white-space: nowrap; }
+    .status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--status-color, var(--text-tertiary)); flex-shrink: 0; }
+    .status[data-state="connected"] { font-size: 0; gap: 0; padding: 0 6px; }
+    .status[data-state="connected"]::before { width: 7px; height: 7px; }
+
+    /* ===== 浮く面(指示のパネル・コメントの編集) ===== */
+    .gv-popover {
+      position: fixed; z-index: 30; background: var(--bg-secondary);
+      border: 1px solid var(--line); border-radius: var(--radius-xl); box-shadow: var(--shadow-popover);
+    }
+    #gv-preview { top: 58px; right: 16px; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 80px); display: flex; flex-direction: column; }
+    #gv-preview[hidden], .gv-popover[hidden] { display: none; }
+    .gv-pop-title { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+    .gv-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 0 16px; font-size: 14px; font-weight: 500; }
+    .gv-pop-body { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+    .gv-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+    .gv-textarea {
+      font: inherit; font-size: 14px; color: var(--text-primary); resize: vertical; min-height: 64px;
+      padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-secondary);
+    }
+    .gv-textarea:focus { outline: none; border-color: #cccccc; }
+    #gv-preview-text {
+      white-space: pre-wrap; font: inherit; font-size: 13px; line-height: 1.7; color: var(--text-primary);
+      background: var(--bg-primary); border-radius: var(--radius-lg); padding: 10px 12px; overflow: auto; min-height: 4rem;
+    }
+    .gv-pop-foot { display: flex; justify-content: flex-end; }
+    .gv-close {
+      width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: var(--text-secondary);
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .gv-close:hover { background: var(--hover); color: var(--text-primary); }
+    .gv-close svg { width: 16px; height: 16px; }
+    .gv-link { font: inherit; font-size: 12px; border: 0; background: none; color: var(--text-secondary); cursor: pointer; padding: 2px 4px; border-radius: var(--radius-sm); }
+    .gv-link:hover { color: var(--text-primary); background: var(--hover); }
+    .gv-link[hidden] { display: none; }
+
+    /* ===== 微調整のパネル ===== */
+    /* 右上の操作バーの下に浮かせ、開閉で本文の幅と位置を変えない(画面をずらさない)。頭をつかんで動かせる */
+    .gv-tweaks {
+      position: fixed; top: 58px; right: 16px; z-index: 20; width: var(--tweaks-width); max-height: calc(100vh - 74px); overflow-y: auto;
+      background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--line); border-radius: var(--radius-xl); box-shadow: var(--shadow-float);
+      display: flex; flex-direction: column; scrollbar-width: thin;
+    }
+    .gv-tweaks[hidden] { display: none; }
+    .gv-tweaks-head { display: flex; align-items: center; gap: 4px; padding: 10px 8px 6px 20px; font-size: 14px; font-weight: 500; cursor: grab; user-select: none; touch-action: none; }
+    .gv-tweaks.gv-dragging .gv-tweaks-head { cursor: grabbing; }
+    .gv-tweaks-head button { cursor: pointer; }
+    .gv-tweaks-head span { flex: 1; }
+    #gv-tweak-list { display: flex; flex-direction: column; gap: 18px; padding: 8px 20px 24px; }
+    .gv-tweak { display: flex; flex-direction: column; gap: 8px; }
+    .gv-tweak-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .gv-tweak-head label { flex: 1; color: var(--text-primary); }
+    .gv-tweak-head output { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+    .gv-tweak input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .gv-tweak input[type="color"] { width: 100%; height: 32px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-secondary); padding: 2px; }
+    .gv-tweak select, .gv-tweak input[type="number"] { font: inherit; font-size: 14px; height: 36px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-secondary); color: var(--text-primary); }
+
+    /* ===== 要素へのコメント ===== */
+    body.gv-commenting #frame-content, body.gv-commenting #frame-content * { cursor: crosshair; }
+    .gv-hover-target { outline: 2px solid var(--brand) !important; outline-offset: 2px; }
+    .gv-pin-layer { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+    .gv-pin {
+      position: absolute; transform: translate(-50%, -50%); pointer-events: auto;
+      width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; background: var(--brand); color: #fff;
+      font: inherit; font-size: 12px; font-weight: 600; line-height: 1; cursor: pointer; font-variant-numeric: tabular-nums;
+      box-shadow: var(--shadow-float);
+    }
+    .gv-pin[data-empty="true"] { background: var(--text-secondary); }
+    #gv-comment-editor { width: 300px; }
+    #gv-comment-target { font-size: 13px; color: var(--text-secondary); padding: 12px 16px 0; overflow-wrap: anywhere; }
+    .gv-editor-foot { display: flex; justify-content: space-between; align-items: center; }
+    /* 浮く案内は黒の面に白の文字 */
+    .gv-hint {
+      position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 30;
+      background: #181818; color: #fff; font-size: 13px; padding: 10px 16px; border-radius: 9999px; white-space: nowrap;
+    }
+    .gv-hint[hidden] { display: none; }
+    .gv-hint kbd { font: inherit; padding: 0 6px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.18); }
+
+    /* ===== 見出し・文字 ===== */
+    h2 { font-size: 22px; font-weight: 500; line-height: 1.5; margin-bottom: 0.5rem; }
+    h3 { font-size: 16px; font-weight: 500; line-height: 1.5; margin-bottom: 0.25rem; }
+    .lede { color: var(--text-secondary); font-size: 14px; margin-bottom: 1.5rem; max-width: 72ch; }
+    .block { margin-bottom: 2rem; }
+    .caption { font-size: 12px; color: var(--text-secondary); margin-bottom: 0.5rem; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--bg-tertiary); padding: 0.1em 0.35em; border-radius: var(--radius-sm); }
+
+    /* ===== 選択肢(.pick-list の 1 列、.pick-grid の並び) ===== */
+    .pick-list { display: flex; flex-direction: column; gap: 8px; }
+    .pick, .pick-tile {
+      --ring: 0 0 0 0 transparent;
+      background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-xl);
+      cursor: pointer; box-shadow: var(--ring); transition: border-color 0.15s ease, background-color 0.15s ease;
+    }
+    .pick:hover, .pick-tile:hover { border-color: #cccccc; }
+    /* 選択は状態の青。枠の太さは変えず内側の輪で 2px に見せ、レイアウトを揺らさない */
+    .pick.selected, .pick-tile.selected { --ring: inset 0 0 0 1px var(--state); border-color: var(--state); }
+    .pick.selected { background: var(--selected-bg); }
+    .pick:focus-visible, .pick-tile:focus-visible { box-shadow: var(--ring), var(--shadow-focus); }
+    .pick { padding: 14px 16px; display: flex; align-items: flex-start; gap: 14px; }
+    .pick .pick-mark {
+      background: var(--bg-tertiary); color: var(--text-secondary); width: 28px; height: 28px; border-radius: var(--radius-md);
+      display: flex; align-items: center; justify-content: center; font-weight: 500; font-size: 13px; flex-shrink: 0;
+    }
+    .pick.selected .pick-mark { background: var(--state); color: #fff; }
+    .pick .pick-body { flex: 1; min-width: 0; }
+    .pick .pick-body h3 { font-size: 15px; margin-bottom: 0.15rem; }
+    .pick .pick-body p { color: var(--text-secondary); font-size: 14px; margin: 0; }
+
+    .pick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 16px; }
+    .pick-tile { overflow: hidden; display: flex; flex-direction: column; }
+    .pick-visual { background: var(--bg-tertiary); aspect-ratio: 16/10; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--line); }
+    .pick-tile .pick-body { padding: 14px 16px 16px; }
+    .pick-tile .pick-body h3 { margin-bottom: 0.25rem; }
+    .pick-tile .pick-body p { color: var(--text-secondary); font-size: 14px; }
+
+    /* frame が足す部品: 推奨の印・選んだ案への補足・別案 */
+    .gv-badge {
+      display: inline-block; margin-left: 8px; vertical-align: 1px; padding: 1px 8px; border-radius: 9999px;
+      font-size: 11px; font-weight: 500; line-height: 1.6; color: var(--state); background: var(--state-track); white-space: nowrap;
+    }
+    .gv-addendum, .other-note {
+      font: inherit; font-size: 14px; color: var(--text-primary); height: 36px; padding: 0 10px;
+      border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-secondary);
+    }
+    .gv-addendum { display: block; width: 100%; margin-top: 10px; cursor: text; }
+    .gv-addendum[hidden] { display: none; }
+    .gv-addendum:focus, .other-note:focus { outline: none; border-color: #cccccc; }
+    .other-note { min-width: 12rem; }
+    .pick-grid > .other-note { grid-column: 1 / -1; }
+    .other-note.selected { border-color: var(--state); box-shadow: inset 0 0 0 1px var(--state); background: var(--selected-bg); }
+
+    /* ===== mockup の入れ物 ===== */
+    .sketch { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-xl); overflow: hidden; margin-bottom: 1.5rem; }
+    .sketch-title { background: var(--bg-primary); padding: 8px 16px; font-size: 12px; color: var(--text-secondary); border-bottom: 1px solid var(--line); }
+    .sketch-body { padding: 1.5rem; }
+
+    .side-by-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; }
+    @media (max-width: 700px) { .side-by-side { grid-template-columns: minmax(0, 1fr); } }
+
+    .tradeoff { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; margin: 1rem 0; }
+    .tradeoff-good, .tradeoff-bad { background: var(--bg-primary); border-radius: var(--radius-lg); padding: 1rem; }
+    .tradeoff-good h4 { color: var(--success); font-size: 14px; font-weight: 500; margin-bottom: 0.5rem; }
+    .tradeoff-bad h4 { color: var(--error); font-size: 14px; font-weight: 500; margin-bottom: 0.5rem; }
+    .tradeoff-good ul, .tradeoff-bad ul { margin-left: 1.25rem; font-size: 14px; color: var(--text-secondary); }
+    .tradeoff-good li, .tradeoff-bad li { margin-bottom: 0.25rem; }
+
+    .wf-blank { background: var(--bg-tertiary); border: 1px dashed var(--border); border-radius: var(--radius-lg); padding: 2rem; text-align: center; color: var(--text-tertiary); }
+
+    /* ===== wireframe の部品 ===== */
+    .wf-nav { background: var(--accent); color: #fff; padding: 0.75rem 1rem; display: flex; gap: 1.5rem; font-size: 14px; }
+    .wf-side { background: var(--bg-primary); padding: 1rem; min-width: 180px; }
+    .wf-main { padding: 1.5rem; flex: 1; }
+    .wf-button { background: var(--accent); color: #fff; border: none; padding: 0.5rem 1rem; border-radius: var(--radius-lg); font-size: 14px; }
+    .wf-input { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 0.5rem; width: 100%; }
+
+    @media (max-width: 720px) {
+      #frame-content { padding: 4.5rem 1rem 6rem; }
+      .gv-tweaks { top: auto !important; left: 8px !important; right: 8px; bottom: 8px; width: auto; max-height: 45vh; }
+      .gv-tweaks-head { cursor: default; }
+    }
+  </style>
+</head>
+<body>
+  <div class="gv-bar" role="toolbar" aria-label="指示の操作" data-gv-ui>
+    <div class="status" role="status">接続中…</div>
+    <button type="button" class="gv-btn gv-progress" id="gv-progress" hidden></button>
+    <span class="gv-sep" aria-hidden="true"></span>
+    <button type="button" class="gv-btn" id="gv-comment-toggle" aria-pressed="false" title="要素を押してコメントを付ける(C)">コメント</button>
+    <button type="button" class="gv-btn" id="gv-tweak-toggle" aria-pressed="true" aria-controls="gv-tweaks" hidden>微調整</button>
+    <!-- 分割ボタン: 左はそのままコピー、右の山形でプレビューと全体への指示を開く -->
+    <div class="gv-split">
+      <button type="button" class="gv-btn gv-primary gv-split-main" id="gv-copy"><svg class="gv-icon" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z"/></svg><span>指示をコピー</span></button>
+      <button type="button" class="gv-btn gv-primary gv-split-caret" id="gv-preview-toggle" aria-expanded="false" aria-controls="gv-preview" aria-label="指示の中身を見る"><svg class="gv-icon" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z"/></svg></button>
+    </div>
+  </div>
+
+  <section id="gv-preview" class="gv-popover" role="dialog" aria-label="ターミナルに貼る指示" hidden data-gv-ui>
+    <div class="gv-pop-body">
+      <div class="gv-pop-title">コピーされる指示</div>
+      <pre id="gv-preview-text"></pre>
+      <label class="gv-field">画面全体への指示(どの問いにも属さないこと)
+        <textarea class="gv-textarea" id="gv-global-note" rows="2" placeholder="例: 全体にもっと詰めて"></textarea>
+      </label>
+    </div>
+  </section>
+
+  <section id="gv-comment-editor" class="gv-popover" role="dialog" aria-label="コメント" hidden data-gv-ui>
+    <div id="gv-comment-target"></div>
+    <div class="gv-pop-body">
+      <textarea class="gv-textarea" id="gv-comment-text" rows="3" aria-label="コメント" placeholder="ここをどうしたいか"></textarea>
+      <div class="gv-editor-foot">
+        <button type="button" class="gv-link" id="gv-comment-delete">削除</button>
+        <button type="button" class="gv-btn gv-primary" id="gv-comment-done">完了</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="gv-hint" id="gv-comment-hint" hidden data-gv-ui>コメントを付ける所を押す <kbd>Esc</kbd> でやめる</div>
+
+  <div class="gv-layout">
+    <div class="main">
+      <div id="frame-content">
+        <!-- CONTENT -->
+      </div>
+    </div>
+    <aside class="gv-tweaks" id="gv-tweaks" aria-label="微調整" hidden data-gv-ui>
+      <div class="gv-tweaks-head"><span>微調整</span>
+        <button type="button" class="gv-link" id="gv-tweak-reset">すべて戻す</button>
+        <button type="button" class="gv-close" id="gv-tweak-close" aria-label="微調整を閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div id="gv-tweak-list"></div>
+    </aside>
+  </div>
+</body>
+</html>

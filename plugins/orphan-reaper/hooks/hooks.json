@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run-with-uv\" \"${CLAUDE_PLUGIN_ROOT}/scripts/reap-orphans.py\"",
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/orphan-cpu-notice.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "safety-guard",
+  "description": "Sends dangerous commands (rm -rf, destructive git checkout, deleting branches other than your working branch, and so on) to confirmation, and blocks reading secrets. / 危ないコマンド（rm -rf・破壊的な git checkout・作業ブランチ以外の削除など）を確認に回し、秘密情報の読み出しを止める。",
+  "author": {
+    "name": "yasuguin"
+  },
+  "repository": "https://github.com/yasuguin/skills",
+  "license": "MIT"
+}

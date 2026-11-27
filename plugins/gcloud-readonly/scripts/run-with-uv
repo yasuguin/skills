@@ -1,0 +1,30 @@
+#!/bin/sh
+# Run an agent hook through uv without requiring mise's PATH to be inherited.
+
+if [ "$#" -eq 0 ]; then
+    printf '%s\n' '使い方: run-with-uv <script> [args...]' >&2
+    exit 2
+fi
+
+home=${HOME:-}
+uv_bin=''
+
+if command -v uv >/dev/null 2>&1; then
+    uv_bin=$(command -v uv)
+elif [ -n "$home" ] && [ -x "$home/.local/share/mise/shims/uv" ]; then  # public: allow（mise の既定の置き場）
+    uv_bin="$home/.local/share/mise/shims/uv"  # public: allow
+elif [ -n "$home" ]; then
+    for candidate in "$home"/.local/share/mise/installs/uv/*/uv; do  # public: allow
+        if [ -x "$candidate" ]; then
+            uv_bin=$candidate
+            break
+        fi
+    done
+fi
+
+if [ -z "$uv_bin" ]; then
+    printf '%s\n' 'uv が見つかりません。PATH、~/.local/share/mise/shims/uv、~/.local/share/mise/installs/uv/*/uv を確認してください。' >&2  # public: allow
+    exit 127
+fi
+
+exec "$uv_bin" run --no-project --offline "$@"

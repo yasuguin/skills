@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run-with-uv\" \"${CLAUDE_PLUGIN_ROOT}/scripts/gcloud-readonly-allow.py\"",
+            "if": "Bash(gcloud *)"
+          }
+        ]
+      }
+    ]
+  }
+}

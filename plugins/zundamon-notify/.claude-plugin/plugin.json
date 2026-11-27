@@ -1,0 +1,9 @@
+{
+  "name": "zundamon-notify",
+  "description": "Announces completion and waiting-for-input in the voice of VOICEVOX Zundamon (a notification sound without VOICEVOX). For macOS. / 作業の完了と入力待ちを、VOICEVOX のずんだもんの声で知らせる（VOICEVOX が無ければ通知音）。macOS 向け。",
+  "author": {
+    "name": "yasuguin"
+  },
+  "repository": "https://github.com/yasuguin/skills",
+  "license": "MIT"
+}

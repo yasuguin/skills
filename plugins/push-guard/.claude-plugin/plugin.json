@@ -1,0 +1,9 @@
+{
+  "name": "push-guard",
+  "description": "Lets git push to the default branch and gh writes such as issues and PRs through without confirmation only for your own repos on an allowlist. / 既定ブランチへの git push と、gh での issue・PR などの書き込みを、自分の repo の許可リストにあるときだけ確認なしで通す。",
+  "author": {
+    "name": "yasuguin"
+  },
+  "repository": "https://github.com/yasuguin/skills",
+  "license": "MIT"
+}

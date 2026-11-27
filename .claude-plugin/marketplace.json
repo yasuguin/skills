@@ -1,0 +1,39 @@
+{
+  "name": "yasuguin",
+  "owner": {
+    "name": "yasuguin",
+    "url": "https://github.com/yasuguin"
+  },
+  "plugins": [
+    {
+      "name": "safety-guard",
+      "source": "./plugins/safety-guard",
+      "description": "Sends dangerous commands (rm -rf, destructive git checkout, deleting branches other than your working branch, and so on) to confirmation, and blocks reading secrets. / 危ないコマンド（rm -rf・破壊的な git checkout・作業ブランチ以外の削除など）を確認に回し、秘密情報の読み出しを止める。"
+    },
+    {
+      "name": "push-guard",
+      "source": "./plugins/push-guard",
+      "description": "Lets git push to the default branch and gh writes such as issues and PRs through without confirmation only for your own repos on an allowlist. / 既定ブランチへの git push と、gh での issue・PR などの書き込みを、自分の repo の許可リストにあるときだけ確認なしで通す。"
+    },
+    {
+      "name": "orphan-reaper",
+      "source": "./plugins/orphan-reaper",
+      "description": "Cleans up development processes left behind by finished sessions (dev servers, test workers, and so on), and tells you about orphans still burning CPU. / 終わったセッションが置き去りにした開発用プロセス（dev server・テストのワーカーなど）を片付け、CPU を使い続けている孤児を知らせる。"
+    },
+    {
+      "name": "zundamon-notify",
+      "source": "./plugins/zundamon-notify",
+      "description": "Announces completion and waiting-for-input in the voice of VOICEVOX Zundamon (a notification sound without VOICEVOX). For macOS. / 作業の完了と入力待ちを、VOICEVOX のずんだもんの声で知らせる（VOICEVOX が無ければ通知音）。macOS 向け。"
+    },
+    {
+      "name": "gcloud-readonly",
+      "source": "./plugins/gcloud-readonly",
+      "description": "Lets gcloud commands mechanically judged read-only through without confirmation. Writes and anything it cannot judge go to confirmation as before. / 読み取りだけと機械的に判定できた gcloud コマンドを、確認なしで通す。書き込みや判定できないものは今までどおり確認に回る。"
+    },
+    {
+      "name": "agent-doctor",
+      "source": "./plugins/agent-doctor",
+      "description": "The agent-doctor skill plus a weekly automatic report. At session start, if 7 days have passed since the last report, it aggregates in the background and tells you in the next session about anomalies slowing development down. / agent-doctor の skill と、週 1 回の自動集計。セッション開始時に前回の集計から 7 日経っていれば裏で集計し、開発を遅くしている異常があれば次のセッションで知らせる。"
+    }
+  ]
+}

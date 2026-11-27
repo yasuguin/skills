@@ -1,0 +1,28 @@
+{
+  "rules": [
+    {
+      "id": "ui-no-toast",
+      "skill": null,
+      "extensions": ["ts", "tsx", "js", "jsx"],
+      "deny_patterns": ["from ['\"]sonner['\"]", "from ['\"]react-hot-toast['\"]"],
+      "allow_patterns": [],
+      "message": "トーストのライブラリは入れません。結果は画面の中の状態表示で返してください"
+    },
+    {
+      "id": "ui-no-gradation",
+      "skill": null,
+      "extensions": ["css", "scss", "tsx", "jsx", "html"],
+      "deny_patterns": ["linear-gradient\\(", "radial-gradient\\("],
+      "allow_patterns": ["mask-image"],
+      "message": "装飾のグラデーションは使いません（フェードの mask-image は許可）。単色の面と濃淡で階層を作ってください"
+    },
+    {
+      "id": "browser-dialog",
+      "skill": null,
+      "extensions": ["ts", "tsx", "js", "jsx"],
+      "deny_patterns": ["window\\.(confirm|alert|prompt)\\("],
+      "allow_patterns": [],
+      "message": "ブラウザ標準のダイアログは使いません。アプリのダイアログ部品で確認してください"
+    }
+  ]
+}

@@ -1,0 +1,138 @@
+{
+  "skill_name": "agent-orchestrate",
+  "cases": [
+    {
+      "id": "herdr-origin-reply-route",
+      "prompt": "名前なし Herdr pane の投函側が worker へタスクを投函する。HERDR_PANE_ID=wJ:p1、TMUX_PANE=%78。並行タスクと混ざらない報告経路を指定せよ。",
+      "expected": [
+        "mktemp で投函専用の /tmp route manifest を作る",
+        "report_route.sh が送信元と worker pane を検証して manifest に固定する",
+        "worker には manifest・pane ID・transport を渡さず、report パスと mark_report_done.sh の手順だけを task に書く",
+        "外側 tmux の %78 を使わず、worker 側で環境変数から返信先を再解釈せず、orchestrator role も推測しない"
+      ]
+    },
+    {
+      "id": "herdr-native-worker-and-id-pairing",
+      "prompt": "Herdr agent `orchestrator` の pane は wJ:p1。Codex に独立レビューを委譲して、完了後に閉じる手順を示せ。",
+      "expected": [
+        "worker role に reviewer を選ぶ",
+        "herdr_start_agent.sh reviewer -- codex を使い、対象 repo の Herdr workspace を再利用する",
+        "agent 起動側で OSC 10/11 を SET しない",
+        "herdr pane get \"$HERDR_PANE_ID\" が成功した実値 wJ:p1 を返信先として固定する",
+        "herdr_start_agent.sh の起動結果に含まれる pane_id を worker の wN:pN として取得し、role 名から再検索しない",
+        "タスクと報告に orchestrator=orchestrator/wJ:p1 と worker=reviewer/wN:pN を入れる",
+        "報告と report の確認後に herdr pane close wN:pN を使う"
+      ]
+    },
+    {
+      "id": "parallel-route-manifests",
+      "prompt": "同じ orchestrator が 2 件の実装を同時に投函する。worker と report パスを安全に分離する手順を示せ。",
+      "expected": [
+        "各投函で別々の mktemp route manifest を作る",
+        "manifest ごとに worker pane、task_id、report_file、reply_to を固定する",
+        "前回 task や共有環境変数から pane ID を流用しない",
+        "レビュー時に報告の task_id・worker・report_file を対応する manifest と照合する"
+      ]
+    },
+    {
+      "id": "orchestrator-outside-tmux-and-herdr",
+      "prompt": "Opus のセッションで「オーケストレーターモードで進めて」と頼まれた。HERDR_ENV も TMUX_PANE も未設定である。どう進めるべきか示せ。",
+      "expected": [
+        "tmux でも Herdr でもないため orchestrator になれないと判断する",
+        "worker を起動せず、route manifest も作らずに停止する",
+        "tmux / Herdr 内でセッションを開き直すようユーザーへ依頼する",
+        "モデルが Fable でないことを理由にせず、前提チェックの失敗として扱う",
+        "自分で実装を始めたり、ポーリングなど別手段で代替したりしない"
+      ]
+    },
+    {
+      "id": "mode-delegation-target",
+      "prompt": "Opus がオーケストレーターモード中に実装タスクを受けた。手元には Agent / Task / Workflow tool もある。委譲先の選び方を示せ。",
+      "expected": [
+        "in-process の sub-agent ではなく tmux / Herdr の pane worker へ委譲する",
+        "初回は ensure_worker_pane.sh で worker を新規起動し、修正往復では健全な pane の続投を選べる",
+        "worker role を implementer / reviewer / investigator / verifier から選ぶ",
+        "モデル名で手順を分岐させず、Fable と同じ rule と完了条件で進める",
+        "orchestrator 自身はゴール設定・タスクファイル作成・レビュー・判定・コミットに専念する"
+      ]
+    },
+    {
+      "id": "worker-agent-choice-not-codex-only",
+      "prompt": "ユーザーが「piに実装させてClaudeでレビューして」と依頼した。worker の起動方法を示せ。",
+      "expected": [
+        "worker agent を codex 固定にせず pi を選ぶ",
+        "ensure_worker_pane.sh pi <対象リポジトリの絶対パス> <worker-role> で新規 pane を起動する",
+        "agent の種類によらず rule・完了条件・レビュー基準(往復10回まで・エビデンス照合・コミット禁止など)を変えない",
+        "task-template の対話承認の禁止・報告手順(mark_report_done.sh)はそのまま使う"
+      ]
+    },
+    {
+      "id": "reply-pane-disappears-before-report",
+      "prompt": "実装と検証の完了後、mark_report_done.sh で done マーカーを書いた。依頼側の pane は消えている可能性がある。worker が行うべき報告処理を示せ。",
+      "expected": [
+        "作業結果の report を残す",
+        "mark_report_done.sh は done マーカーを書いて正常終了する(検知と配送は投函側の courier が行う)",
+        "同じ report パスで mark_report_done.sh を再実行しない",
+        "role・環境変数・以前の task から宛先を推測して自力で送信しようとしない",
+        "最終応答で done マーカー記録済みであることを明記する"
+      ]
+    },
+    {
+      "id": "worker-agent-choice-includes-pi-and-codex",
+      "prompt": "ユーザーが「piに実装させて、レビューはcodexでやって」と依頼した。worker の起動方法を示せ。",
+      "expected": [
+        "実装に pi、レビューに codex を選ぶ",
+        "初回は ensure_worker_pane.sh pi <対象リポジトリの絶対パス> implementer で実装 worker を新規起動する",
+        "ensure_worker_pane.sh codex <対象リポジトリの絶対パス> reviewer で独立レビュー worker を新規起動する",
+        "agent の種類によらず rule・完了条件・レビュー基準(往復10回まで・エビデンス照合・コミット禁止など)を変えない"
+      ]
+    },
+    {
+      "id": "worker-agent-choice-not-implicit",
+      "prompt": "ユーザーが worker agent 種別を明示せずに実装委譲を依頼した。worker 起動前に何をするか。",
+      "expected": [
+        "明示がないので既定の codex を worker agent として選び、質問せずに起動する",
+        "選択 UI で確認する場合でも選択肢の先頭を codex にする",
+        "選ばれた agent(既定なら codex)を同一セッションの以後の投函の既定にし、往復ごとに聞き直さない",
+        "ユーザーが agent を明示済みの場合はそれに従う"
+      ]
+    },
+    {
+      "id": "send-tmux-accepted-input-is-not-visible",
+      "prompt": "tmux pane の TUI は入力を受理すると本文を画面から消す。tmux_send.sh の capture-pane に本文が見つからない場合、どう判定・対応するか。",
+      "expected": [
+        "tmux send-keys が成功していれば tmux への送達成功として扱う",
+        "capture-pane の本文不在だけでは Enter や本文を再送しない",
+        "後続の [報告] 着弾で end-to-end を確認する"
+      ]
+    },
+    {
+      "id": "send-herdr-reply-target",
+      "prompt": "Herdr 内で起動元 agent に完了報告を返す。環境変数は HERDR_ENV=1, HERDR_PANE_ID=wJ:p1, TMUX_PANE=%78。",
+      "expected": [
+        "返信先に wJ:p1 を使う",
+        "TMUX_PANE=%78 を返信先に使わない",
+        "herdr_send.sh が Herdr transport を使い、ENTER で本文を確定することを説明する"
+      ]
+    },
+    {
+      "id": "send-herdr-role-id-pairing",
+      "prompt": "Herdr の reviewer worker (w2:p1) から orchestrator (w1:p1) へ完了報告を送る。両方の role と ID を確実に追跡したい。",
+      "expected": [
+        "送信前に herdr agent get orchestrator または herdr pane get w1:p1 で対応を確認する",
+        "宛先として w1:p1 を使う",
+        "報告に orchestrator=orchestrator/w1:p1 と worker=reviewer/w2:p1 を含める",
+        "herdr_send.sh が Herdr transport を使い、ENTER で本文を確定することを説明する"
+      ]
+    },
+    {
+      "id": "send-unnamed-herdr-origin",
+      "prompt": "名前なし Herdr pane から受け取った task が、完了報告先として外側 tmux の %65 を指定している。worker 自身は HERDR_PANE_ID=wV:p2 で、投函側の実 ID は task にない。どう扱うか。",
+      "expected": [
+        "worker 自身の wV:p2 を起動元の代わりに使わない",
+        "%65 へ推測送信しない",
+        "投函側が検証した Herdr の reply-to を task に明記し直す必要があると説明する"
+      ]
+    }
+  ]
+}

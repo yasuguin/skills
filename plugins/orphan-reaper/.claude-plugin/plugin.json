@@ -1,0 +1,9 @@
+{
+  "name": "orphan-reaper",
+  "description": "Cleans up development processes left behind by finished sessions (dev servers, test workers, and so on), and tells you about orphans still burning CPU. / 終わったセッションが置き去りにした開発用プロセス（dev server・テストのワーカーなど）を片付け、CPU を使い続けている孤児を知らせる。",
+  "author": {
+    "name": "yasuguin"
+  },
+  "repository": "https://github.com/yasuguin/skills",
+  "license": "MIT"
+}

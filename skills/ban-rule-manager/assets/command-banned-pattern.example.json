@@ -1,0 +1,18 @@
+{
+  "rules": [
+    {
+      "id": "use-pnpm",
+      "skill": null,
+      "deny_patterns": ["(^|[;&|[:space:]])npm[[:space:]]+(i|install|run|ci)\\b"],
+      "allow_patterns": [],
+      "message": "npm は使いません。pnpm を使ってください（npm install → pnpm install）"
+    },
+    {
+      "id": "use-uv",
+      "skill": null,
+      "deny_patterns": ["(^|[;&|[:space:]])(pip|pip3|pipx)[[:space:]]+install\\b"],
+      "allow_patterns": [],
+      "message": "pip / pipx は使いません。uv を使ってください（uv add、uv tool install）"
+    }
+  ]
+}

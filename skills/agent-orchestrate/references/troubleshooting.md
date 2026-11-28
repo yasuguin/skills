@@ -43,3 +43,12 @@
   30 秒で「起動しなかった」になる(pi 自体は起動している。2026-09-14 実測)。
   `tmux select-layout -t <session:window> tiled` で全部の pane を同じ大きさにしてから、`capture-pane` で `(auto)` を見直す。
   5 台並べても、pane が 69x16 あれば動いた。
+
+## 報告も通知も来ないまま様子を見るとき
+
+- **報告も通知も来ないまま様子を見るとき**(ユーザーに「様子を見て」と言われたときなど)は、自分で作った route manifest にある
+  `report_file`・`<report_file>.delivered`・`<report_file>.undeliverable` を直接読む。
+  - report が出来ていれば、worker の pane には触らずに Workflow 6 のレビューへ進む。`confirmed=unconfirmed` でも、report と done マーカーはもう出来ている
+    (送るコマンドは成功していて、着弾による表示の変化を確かめられなかっただけ)。
+  - report が出来ていないときだけ、`tmux capture-pane -p -t <worker>` で 1 回だけ様子を見る(1 回きりの確認で、ポーリングではない)。
+  - ここを怠ると、report と worker の作業ツリーにある未 commit の diff が、レビューも commit もされないまま放置されかねない。

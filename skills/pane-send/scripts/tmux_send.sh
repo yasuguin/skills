@@ -9,7 +9,7 @@ tmux display-message -p -t "$pane" '#{pane_id}' >/dev/null
 # tmux は send-keys を受理したことまでは確認できるが、汎用的に TUI が入力を
 # 受理したかを照合する状態 API を持たない。入力を受理すると本文を画面から消す
 # TUI もあるため、capture-pane の本文不在を失敗として Enter を再送してはならない。
-# 実際の task 完了は、報告の配送（references/delivery.md）で end-to-end に確認する。
+# 実際の task 完了は、agent-orchestrate の報告の配送（courier）で end-to-end に確認する。
 send_text() { tmux send-keys -t "$pane" -l -- "$msg"; sleep 1; }
 press_enter() { tmux send-keys -t "$pane" Enter; sleep 2; }
 send_text

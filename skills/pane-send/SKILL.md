@@ -1,6 +1,12 @@
-# pane への送信(delivery)
+---
+name: pane-send
+description: "tmux または Herdr の pane で動くエージェント(codex / claude / pi など)へ、1 行のメッセージを確実に届ける。transport の選び方、本文と Enter を分けて送ること、着弾の確かめ方、決まった時刻に送る予約送信を持つ。「ペインに送って」「codex に報告して」「Claude に完了を伝えて」「4 時に codex に Enter を送って」のような依頼で使う。worker に実装を任せてレビューを繰り返すのは agent-orchestrate。"
+---
 
-pane への送信の正本。task の投函、完了の報告、予約した送信、通知のどれもがここの手順を使う。
+# pane-send
+
+pane への送信の正本。agent-orchestrate の task の投函と完了の報告(courier)も、このスクリプトで送る。
+
 `<skill-dir>` は、この skill(SKILL.md のあるディレクトリ)の絶対パスを指す。
 
 ## GOAL
@@ -23,7 +29,7 @@ tmux または Herdr の指定した pane へ、1 行のメッセージを確実
   **例外は起動直後の飲み込みだけ**: 相手の agent が起動中や再描画中だと、本文が丸ごと落ちることがある(codex の起動バナーが出ている間の投函が 2 回続けて消えた実測がある)。
   送ったあとで相手が実行中の表示に変わらず、しかも入力欄が**空**(プレースホルダーが出ている)のときだけ、ENTER を 1 回送り直し、それでもだめなら本文を 1 回送り直して立て直してよい
   (空の入力欄へ本文を送り直しても二重の投函にならない。入力欄に本文が残っているなら ENTER だけ)。
-  task の投函ではさらに、実行中の表示に変わるのを確かめるまでを完了条件にする(SKILL.md の Workflow 4)。task が端から端まで通ったかは、SKILL.md の報告の配送(courier)で確かめる。
+  task の投函ではさらに、実行中の表示に変わるのを確かめるまでを完了条件にする(agent-orchestrate の Workflow 4)。task が端から端まで通ったかは、agent-orchestrate の報告の配送(courier)で確かめる。
 - Herdr では、送ったあとに本文と状態を確かめる。本文が見えるだけでは、入力欄に送られないまま残っている場合と見分けられない。送る前に `idle` だった Herdr の agent なら、
   **`working` に変わることも送信の完了条件**にする。確かめられなかったら、**本文は送り直さず、ENTER だけを 1 回送り直す**。
   最初の Enter だけが落ちていた場合に本文を送り直すと、同じ task を二重に投函してしまうので、本文の再送はしない。
@@ -42,7 +48,7 @@ tmux または Herdr の指定した pane へ、1 行のメッセージを確実
 ```sh
 tmux list-panes -a -F 'pane_id=#{pane_id} cmd=#{pane_current_command} title=#{pane_title}'
 herdr pane list # Herdr 内ではこちらの pane_id (w1:p1 形式) を確認する
-herdr agent get reviewer # 登録済み agent の確認用。この skill は起動結果の pane_id を使い、role 名から再検索しない
+herdr agent get reviewer # 登録済み agent の確認用。agent-orchestrate は起動結果の pane_id を使い、role 名から再検索しない
 ```
 
 - `cmd=codex` / `cmd=claude` のような `pane_current_command` で相手のエージェントを見分ける。候補が複数あって絞れなければユーザーに確かめる。
@@ -112,4 +118,4 @@ herdr pane read <herdr-pane-id> --source recent-unwrapped --lines 15
   または idle の agent が `working` に変わらない場合は、ENTER を 1 回だけ送り直す。
   本文は送り直さない。それでも確かめられなければ、送信の失敗としてユーザーに報告する(何度も送らない)。
 
-- 決まった時刻まで待ってから送りたい(予約送信)ときは [schedule.md](schedule.md) を読む(時刻の決め方と待ち方。送る手順はこのファイルに従う)。
+- 決まった時刻まで待ってから送りたい(予約送信)ときは [references/schedule.md](references/schedule.md) を読む(時刻の決め方と待ち方。送る手順はこのファイルに従う)。

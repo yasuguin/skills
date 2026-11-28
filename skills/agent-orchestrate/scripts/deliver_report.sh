@@ -41,8 +41,8 @@ done <"$route_file"
 [[ "$schema" == "agent-orchestrate-route-v1" ]] || { echo "error: 未対応の route manifest" >&2; exit 1; }
 [[ "$signal_file" == /tmp/* ]] || { echo "error: signal_file は /tmp 配下にすること" >&2; exit 1; }
 
-# テストでは未デプロイの sender を差し替えられるようにする
-sender_dir="${AGENTS_PLAY_CATCH_SENDER_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# 送信スクリプトは pane-send skill が持つ(隣に置いた skill の scripts/)。テストでは差し替えられるようにする
+sender_dir="${AGENTS_PLAY_CATCH_SENDER_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/pane-send/scripts}"
 
 # signal の着弾を最大 8 時間待つ。route が消えたら投函側が片付けたとみなして黙って終了する。
 # これは orchestrator エージェントのターン内ポーリングではなく、detach した shell プロセスの待機。
@@ -100,6 +100,7 @@ else
   echo "error: 未対応 transport: $transport" >&2
   exit 1
 fi
+[[ -f "${send[1]}" ]] || { echo "error: 送信スクリプト ${send[1]} がない。agent-orchestrate の隣に pane-send skill を入れること" >&2; exit 1; }
 
 # 送信は一時的に失敗しうる（2026-10-05 実測: 起動元 pane へ tmux が「not in a mode」を返し、1 回の失敗で
 # .undeliverable になって [報告] が届かなかった）。同じ宛先へ間隔を空けて数回送り直す。宛先は manifest の正本の
@@ -138,7 +139,7 @@ if [[ "$transport" == "herdr" ]]; then
   exit 0
 fi
 
-# tmux は send-keys の受理までしか汎用に確認できない(references/delivery.md 参照)。
+# tmux は send-keys の受理までしか汎用に確認できない(pane-send skill の SKILL.md 参照)。
 # `tmux send-keys` 成功後も、TUI の再描画中に本文が丸ごと飲み込まれて実際には
 # 着弾しないことがある。送信直前に取った pre_snap と比較し、pane の表示内容が
 # 変化したかどうかを着弾の追加根拠として最大20秒待つ(相手が新しいメッセージを

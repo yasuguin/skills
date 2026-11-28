@@ -26,7 +26,7 @@ copy_script() {
 copy_script "$source_dir/scripts" deliver_report.sh "$runtime_dir/deliver_report.sh"
 copy_script "$source_dir/scripts" report_route.sh "$runtime_dir/report_route.sh"
 copy_script "$source_dir/scripts" mark_report_done.sh "$runtime_dir/mark_report_done.sh"
-copy_script "$source_dir/scripts" tmux_send.sh "$sender_dir/tmux_send.sh"
+copy_script "$source_dir/../pane-send/scripts" tmux_send.sh "$sender_dir/tmux_send.sh"
 chmod +x "$runtime_dir"/*.sh "$sender_dir"/*.sh
 
 report_file="$test_dir/report.md"

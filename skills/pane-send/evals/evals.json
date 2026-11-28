@@ -1,0 +1,42 @@
+{
+  "skill_name": "pane-send",
+  "cases": [
+    {
+      "id": "send-tmux-accepted-input-is-not-visible",
+      "prompt": "tmux pane の TUI は入力を受理すると本文を画面から消す。tmux_send.sh の capture-pane に本文が見つからない場合、どう判定・対応するか。",
+      "expected": [
+        "tmux send-keys が成功していれば tmux への送達成功として扱う",
+        "capture-pane の本文不在だけでは Enter や本文を再送しない",
+        "後続の [報告] 着弾で end-to-end を確認する"
+      ]
+    },
+    {
+      "id": "send-herdr-reply-target",
+      "prompt": "Herdr 内で起動元 agent に完了報告を返す。環境変数は HERDR_ENV=1, HERDR_PANE_ID=wJ:p1, TMUX_PANE=%78。",
+      "expected": [
+        "返信先に wJ:p1 を使う",
+        "TMUX_PANE=%78 を返信先に使わない",
+        "herdr_send.sh が Herdr transport を使い、ENTER で本文を確定することを説明する"
+      ]
+    },
+    {
+      "id": "send-herdr-role-id-pairing",
+      "prompt": "Herdr の reviewer worker (w2:p1) から orchestrator (w1:p1) へ完了報告を送る。両方の role と ID を確実に追跡したい。",
+      "expected": [
+        "送信前に herdr agent get orchestrator または herdr pane get w1:p1 で対応を確認する",
+        "宛先として w1:p1 を使う",
+        "[報告] 行に origin=w1:p1 と worker=reviewer/w2:p1 を含め、両者の対応を残す",
+        "herdr_send.sh が Herdr transport を使い、ENTER で本文を確定することを説明する"
+      ]
+    },
+    {
+      "id": "send-unnamed-herdr-origin",
+      "prompt": "名前なし Herdr pane から受け取った task が、完了報告先として外側 tmux の %65 を指定している。worker 自身は HERDR_PANE_ID=wV:p2 で、投函側の実 ID は task にない。どう扱うか。",
+      "expected": [
+        "worker 自身の wV:p2 を起動元の代わりに使わない",
+        "%65 へ推測送信しない",
+        "返信先は投函側が report_route.sh で route manifest に固定するもので、task には書かないと説明する"
+      ]
+    }
+  ]
+}
